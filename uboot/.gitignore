@@ -1,0 +1,108 @@
+#
+# NOTE! Don't add files that are generated in specific
+# subdirectories here. Add them in the ".gitignore" file
+# in that subdirectory instead.
+#
+# Normal rules
+#
+.*
+*.o
+*.o.*
+*.a
+*.s
+*.su
+*.mod.c
+*.i
+*.lst
+*.order
+*.elf
+*.swp
+*.bin
+*.patch
+*.cfgtmp
+
+# host programs on Cygwin
+*.exe
+
+# Build tree
+/build-*
+
+#
+# Top-level generic files
+#
+/MLO*
+/SPL
+/System.map
+/u-boot*
+
+
+#
+# git files that we don't want to ignore even it they are dot-files
+#
+!.gitignore
+!.mailmap
+
+#
+# Generated files
+#
+/LOG
+/spl/
+/tpl/
+/arch/arm/include/asm/arch
+/arch/arm/include/asm/proc
+/examples/flash_writer_u/image/realtek_ntsc1.bmp
+/examples/flash_writer_u/image/realtek_ntsc1.bmp.dat
+/examples/flash_writer_u/image/realtek_ntsc1.bmp.inf
+/examples/flash_writer_u/include/project_config_f.h
+/examples/flash_writer_u/tools/RtSSL/RtSSL
+/examples/flash_writer_u/tools/bindAllBins/bindAllBins
+/examples/flash_writer_u/image/rsa_key_2048.pem.bin.rev
+/examples/flash_writer_u/bootcode2_signature.bin.reverse
+/examples/flash_writer_u/Bind/
+/examples/flash_writer_u/dvrboot*
+/examples/flash_writer_u/inverse
+/examples/flash_writer_u/temp_target_array.h
+/bootloader.tar
+/include/asm
+
+/tools/gen_eth_addr
+/tools/mkenvimage
+/tools/mkimage
+
+#
+# Generated include files
+#
+/include/config/
+/include/generated/
+/include/autoconf*
+/include/config.h
+/include/config.mk
+
+# stgit generated dirs
+patches-*
+.stgit-edit.txt
+
+# quilt's files
+patches
+series
+
+# gdb files
+.gdb_history
+
+# cscope files
+cscope.*
+
+# tags files
+/tags
+/ctags
+/etags
+
+# gnu global files
+GPATH
+GRTAGS
+GSYMS
+GTAGS
+
+*.orig
+*~
+\#*#
