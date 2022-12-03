@@ -1,5 +1,5 @@
 #! /usr/bin/perl -w
-if( defined(@ARGV) )
+if( @ARGV )
 {
 	foreach $arg (@ARGV) {
 		($type, $file) = split(/=/, $arg);
