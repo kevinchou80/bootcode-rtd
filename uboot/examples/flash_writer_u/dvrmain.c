@@ -262,12 +262,12 @@ int dvrmain	( int argc, char * const argv[] )
     // spi bl31
     unsigned char * spi_bl31_addr;
     unsigned char * spi_bl31_sig_addr;
-#if defined(Config_Secure_Improve_TRUE)
+//#if defined(Config_Secure_Improve_TRUE)
     unsigned char * spi_Kpublic_fw_addr;
     unsigned char * spi_Kpublic_fw_sig_addr;
     unsigned char * spi_Kpublic_tee_addr;
     unsigned char * spi_Kpublic_tee_sig_addr;
-#endif
+//#endif
     unsigned char * spi_rsa_pub_addr;
     unsigned char * spi_bootcode_sig_addr;
     unsigned char * spi_bootcode_addr2;
@@ -341,7 +341,7 @@ int dvrmain	( int argc, char * const argv[] )
 	unsigned int	programmed_bl31_size;
 	unsigned char * programmed_bl31_sig_base;
 	unsigned int	programmed_bl31_sig_size;
-#if defined(Config_Secure_Improve_TRUE)
+//#if defined(Config_Secure_Improve_TRUE)
 	unsigned char * programmed_Kpublic_fw_base;
 	unsigned int	programmed_Kpublic_fw_size;
 	unsigned char * programmed_Kpublic_fw_sig_base;
@@ -350,7 +350,7 @@ int dvrmain	( int argc, char * const argv[] )
 	unsigned int	programmed_Kpublic_tee_size;
 	unsigned char * programmed_Kpublic_tee_sig_base;
 	unsigned int	programmed_Kpublic_tee_sig_size;
-#endif
+//#endif
 	unsigned char * programmed_rsa_pub_base;
 	unsigned int	programmed_rsa_pub_size;
     
@@ -474,6 +474,15 @@ int dvrmain	( int argc, char * const argv[] )
     programmed_Kpublic_tee_base       = Kpublic_tee;
 	programmed_Kpublic_tee_sig_size   = (unsigned int )(&Kpublic_tee_signature_end - Kpublic_tee_signature);
     programmed_Kpublic_tee_sig_base       = Kpublic_tee_signature;
+#else
+    programmed_Kpublic_fw_size = 0;
+    programmed_Kpublic_fw_base = 0;
+	programmed_Kpublic_fw_sig_size = 0;
+    programmed_Kpublic_fw_sig_base = 0;
+	programmed_Kpublic_tee_size = 0;;
+    programmed_Kpublic_tee_base = 0;
+	programmed_Kpublic_tee_sig_size = 0;
+    programmed_Kpublic_tee_sig_base = 0;
 #endif
 	if (signature_size>=sizeof(unsigned int))
 		programmed_img_sig_size		  = signature_size;
@@ -508,24 +517,23 @@ int dvrmain	( int argc, char * const argv[] )
 	// spi fsbl
     spi_fsbl_addr                = spi_bootcode_sig_addr + signature_size;
 	spi_fsbl_sig_addr            = spi_fsbl_addr + programmed_fsbl_size;
-    // bootcode64
-	spi_bootcode64_addr          = spi_fsbl_sig_addr + programmed_fsbl_sig_size;
     // spi tee os
-    spi_fsbl_os_addr             = spi_bootcode64_addr + programmed_img64_size;
+    spi_fsbl_os_addr             = spi_fsbl_sig_addr + programmed_fsbl_sig_size;
 	spi_fsbl_os_sig_addr         = spi_fsbl_os_addr + programmed_fsbl_os_size; 
     // spi bl31
 	spi_bl31_addr                = spi_fsbl_os_addr + programmed_fsbl_os_size;
 	spi_bl31_sig_addr            = spi_bl31_addr + programmed_bl31_size;
-#if defined(Config_Secure_Improve_TRUE)
-	spi_Kpublic_fw_addr          = spi_fsbl_os_sig_addr + programmed_fsbl_os_sig_size;
+	// Config_Secure_Improve_TRUE
+	spi_Kpublic_fw_addr          = spi_bl31_sig_addr + programmed_bl31_sig_size;
 	spi_Kpublic_fw_sig_addr      = spi_Kpublic_fw_addr + programmed_Kpublic_fw_size;    
 	spi_Kpublic_tee_addr         = spi_Kpublic_fw_sig_addr + programmed_Kpublic_fw_sig_size;
 	spi_Kpublic_tee_sig_addr     = spi_Kpublic_tee_addr + programmed_Kpublic_tee_size;    
-	spi_rescue_addr              = spi_Kpublic_tee_sig_addr + programmed_Kpublic_tee_sig_size;
-#else
-	spi_rescue_addr              = spi_fsbl_os_sig_addr + programmed_fsbl_os_sig_size;
-#endif
+	// bootcode64
+	spi_bootcode64_addr          = spi_Kpublic_tee_sig_addr + programmed_Kpublic_tee_sig_size;
+	// rescue
+	spi_rescue_addr              = spi_bootcode64_addr + programmed_img64_size;
 	spi_rescue_sig_addr          = spi_rescue_addr + linux_rescue_hasharray_size;
+
 	spi_rsa_pub_addr             = SPI_CODE_PART1+0x80000;
 	spi_bootcode_addr2           = SPI_CODE_PART2;
 	spi_bootcode_addr3           = SPI_CODE_PART3;
@@ -2100,26 +2108,6 @@ program_backup_copy_of_hwsetting:
 	        	return -6;
 	    	}	    	
 	    }
-	    // bootcode64
-	    if (programmed_img64_size > 0)
-		{
-			#ifdef FOR_ICE_LOAD
-			prints("\nspi : write bootcode64, start=0x");
-			print_hex(spi_bootcode64_addr);
-			prints(", len=0x");
-			print_hex(programmed_img64_size);
-			prints("\n");
-			#endif
-		    if ((*do_write)(device, programmed_img64_base, (unsigned int *)spi_bootcode64_addr, programmed_img64_size, 0, 0)!= 0 ) {
-		        return -6;
-		    }
-		    param.bootcode_img64_saddr = spi_bootcode64_addr;
-		    param.bootcode_img64_size = programmed_img64_size;
-		}
-	    else {
-		    param.bootcode_img64_saddr = 0;
-		    param.bootcode_img64_size  = 0;
-	    }
         //fsbl os
 	    if (programmed_fsbl_os_size > 0)
 	    {
@@ -2162,12 +2150,6 @@ program_backup_copy_of_hwsetting:
 	    	if ((*do_write)(device, programmed_bl31_base, (unsigned int *)spi_bl31_addr, programmed_bl31_size, 0, 0)!= 0 ) {
 	        	return -6;
 	    	}
-		    param.jumper_saddr = spi_bl31_addr;
-		    param.jumper_size  = programmed_bl31_size;
-	    }
-	    else {
-		    param.jumper_saddr = 0;
-		    param.jumper_size  = 0;
 	    }
         //bl31 sig
 	    if (programmed_bl31_sig_size > 0)
@@ -2184,7 +2166,6 @@ program_backup_copy_of_hwsetting:
 	    	}
 	    }
 
-#if defined(Config_Secure_Improve_TRUE)
         //Kpublic_fw
 	    if (programmed_Kpublic_fw_size > 0)
 	    {
@@ -2241,18 +2222,20 @@ program_backup_copy_of_hwsetting:
 	        	return -6;
 	    	}
 	    }
-#endif
+
         //rescue kernel 
-#if 0
-        #ifdef FOR_ICE_LOAD
-        prints("\nspi : write rescue, start=0x");
-        print_hex(spi_rescue_addr);
-        prints(", len=0x");
-        print_hex(programmed_linux_rescue_img_size);
-        prints("\n");
-        #endif
-	    if ((*do_write)(device, programmed_linux_rescue_img_base, (unsigned int *)spi_rescue_addr, programmed_linux_rescue_img_size, 0, 0)!= 0 ) {
-	        return -6;
+        if (programmed_linux_rescue_img_size > 0)
+        {
+            #ifdef FOR_ICE_LOAD
+            prints("\nspi : write rescue, start=0x");
+            print_hex(spi_rescue_addr);
+            prints(", len=0x");
+            print_hex(programmed_linux_rescue_img_size);
+            prints("\n");
+            #endif
+	        if ((*do_write)(device, programmed_linux_rescue_img_base, (unsigned int *)spi_rescue_addr, programmed_linux_rescue_img_size, 0, 0)!= 0 ) {
+	            return -6;
+	        }
 	    }
 		//rescue signature
 	    if (programmed_linux_rescue_sig_size > 0)
@@ -2268,49 +2251,33 @@ program_backup_copy_of_hwsetting:
 	        	return -6;
 	    	}
 	    }
-#endif 
-        //rsa_pub
-	    if (programmed_rsa_pub_size > 0)
-	    {
-            #ifdef FOR_ICE_LOAD
-            prints("\nspi : write rsa_pub, start=0x");
-            print_hex(spi_rsa_pub_addr);
-            prints(", len=0x");
-            print_hex(programmed_rsa_pub_size);
-            prints("\n");
-            #endif
-	    	if ((*do_write)(device, programmed_rsa_pub_base, (unsigned int *)spi_rsa_pub_addr, programmed_rsa_pub_size, 0, 0)!= 0 ) {
-	        	return -6;
-	    	}
-	    }
+#if 0	    
+	    prints("\nspi : spi_Kpublic_fw_addr=0x");print_hex(spi_Kpublic_fw_addr);
+		prints("\nspi : spi_Kpublic_fw_sig_addr=0x");print_hex(spi_Kpublic_fw_sig_addr);
+		prints("\nspi : spi_Kpublic_tee_addr=0x");print_hex(spi_Kpublic_tee_addr);
+		prints("\nspi : spi_Kpublic_tee_sig_addr=0x");print_hex(spi_Kpublic_tee_sig_addr);
 
-	    if( bootcode2_boot_programmed_img_size ) {
-	    	// write bootcode2		
-			#ifdef FOR_ICE_LOAD
-        		prints("\nspi : write bootcode2, start=0x");
-        		print_hex(spi_bootcode_addr2);
-        		prints(", len=0x");
-        		print_hex(bootcode2_boot_programmed_img_size);
-        		prints(", src=0x");
-        		print_hex(bootcode2_boot_programmed_img_base);
-        		prints("\n");
-        	#endif
-#ifdef CONFIG_DTB_IN_SPI_NOR
-		    if( bootcode2_boot_programmed_img_size > (320<<10) ) {
-				prints("\nspi : bootcode2 size is too large, bootcode2 not program");
-				return -5;
-	    	}
-#else
-			if( bootcode2_boot_programmed_img_size > (384<<10) ) {
-				prints("\nspi : bootcode2 size is too large, bootcode2 not program");
-				return -5;
-	    	}
+		prints("\nspi : programmed_Kpublic_fw_size=0x");print_hex(programmed_Kpublic_fw_size);
+		prints("\nspi : programmed_Kpublic_fw_sig_size=0x");print_hex(programmed_Kpublic_fw_sig_size);
+		prints("\nspi : programmed_Kpublic_tee_size=0x");print_hex(programmed_Kpublic_tee_size);
+		prints("\nspi : programmed_Kpublic_tee_sig_size=0x");print_hex(programmed_Kpublic_tee_sig_size);
 #endif
-			if ((*do_write)(device, bootcode2_boot_programmed_img_base, (unsigned int *)spi_bootcode_addr2, bootcode2_boot_programmed_img_size, 0, 0)!= 0 ) {
+		
+	    // bootcode64
+	    if (programmed_img64_size > 0)
+		{
+			#ifdef FOR_ICE_LOAD
+			prints("\nspi : write bootcode64, start=0x");
+			print_hex(spi_bootcode64_addr);
+			prints(", len=0x");
+			print_hex(programmed_img64_size);
+			prints("\n");
+			#endif
+		    if ((*do_write)(device, programmed_img64_base, (unsigned int *)spi_bootcode64_addr, programmed_img64_size, 0, 0)!= 0 ) {
 		        return -6;
 		    }
-   		}
-	    
+		}
+#if 1
 	    // write parameter
 	    #ifdef FOR_ICE_LOAD
         prints("\nspi : write parameter, start=0x");
@@ -2322,12 +2289,8 @@ program_backup_copy_of_hwsetting:
 	    if ((*do_write)(device, (unsigned char *)&param, (unsigned int *)spi_param_addr, sizeof(t_extern_param), 0, 0)!= 0 ) {
 	        return -14;
 	    }
-
-#if 0 // dump flash
-		spi_switch_read_mode();
-		spi_hexdump("spi data", spi_param_addr, 64);
-		spi_hexdump("spi data", spi_bootcode_addr2, 64);
-		spi_hexdump("spi data", spi_bootcode_addr3, 64);
+#else
+		prints("\nspi : Not write parameter\n");
 #endif
 
 	    #ifdef FOR_ICE_LOAD
@@ -2341,7 +2304,7 @@ program_backup_copy_of_hwsetting:
 	{
 		unsigned char * read_buf;
 		unsigned int block_no;
-                unsigned int block_no_64;
+        unsigned int block_no_64;
 		unsigned int buf_start;
 		unsigned int data_length;
 
@@ -2590,15 +2553,21 @@ program_backup_copy_of_hwsetting:
  #ifdef Config_Uboot64_Mode_TRUE
 		// bootcode
 		//block_no += align_to_boundary(hwsetting_size, EMMC_BLOCK_SIZE);
+#ifdef Param_Uboot64_Blk_Base
+		block_no_64 = Param_Uboot64_Blk_Base; //0x29F80
+#else		
 		block_no_64 = 164133; //0x5024A00
+#endif
         #ifdef FOR_ICE_LOAD
-    	prints("write bootcode64: block 0x");
+    	prints("write bootcode64: byte offset 0x");
+		print_hex(block_no_64<<9);
+		prints(", block 0x");
         print_hex(block_no_64);
     	prints(", size 0x");
         print_hex(programmed_img64_size);
         prints("\n");
         #endif
-		rtprintf("write bootcode: block 0x%x, size 0x%x\n", block_no_64, programmed_img64_size);
+		rtprintf("write bootcode: byte offset 0x%08x, block 0x%08x, size 0x%x\n", (block_no_64<<9), block_no_64, programmed_img64_size);
 
 		if ((*do_write)( device, (unsigned char *)DATA_TMP_ADDR, &block_no_64, programmed_img64_size, 0, 0)) {
             #ifdef FOR_ICE_LOAD

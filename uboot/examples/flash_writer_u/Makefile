@@ -107,6 +107,7 @@ HW_SETTING_HEADER_FINAL = $(BIND_FOLDER)/hwsetting_header.bin
 HW_SETTING_HEADER_FINAL_ENC = $(BIND_FOLDER)/hwsetting_header_enc.bin
 UBOOT_FINAL = $(BIND_FOLDER)/uboot.bin
 UBOOT2_FINAL = $(BIND_FOLDER)/uboot2.bin
+UBOOT64_FINAL = $(BIND_FOLDER)/uboot64.bin
 RESCUE_FINAL = $(BIND_FOLDER)/rescue.bin
 FSBL_FINAL = $(BIND_FOLDER)/fsbl.bin
 FSBL_OS_FINAL = $(BIND_FOLDER)/fsbl_os.bin
@@ -843,6 +844,10 @@ endif
 ifeq ($(Config_BL31), TRUE)
 		cat $(BL31_FINAL) > install_a/bl31.bin
 endif
+ifeq ($(Config_Secure_Improve), TRUE)
+		cat $(RSA_BIN_FW_FINAL) > install_a/rsa_bin_fw.bin
+		cat $(RSA_BIN_TEE_FINAL) > install_a/rsa_bin_tee.bin
+endif
 ifeq ($(Config_SPI_BOOTCODE2), TRUE)
 		cat $(UBOOT2_FINAL) > install_a/uboot2.bin
 		./create_hd.pl $(UBOOT2_FINAL) > install_a/bootcode2.hdr
@@ -1138,6 +1143,7 @@ target_encrypt: $(SHA_EXE)
 	$(RTSSL_EXE) enc -e -aes_128_ecb -i $(RS2_ENC) -o $(SIGNATURE_TARGET) -k `hexdump -e '8/1 "%02x"' $(AES_KEY_PATH)`
 	cat $(BOOTCODE_BOOT_HASH_TARGET2) $(SIGNATURE_TARGET) > $(UBOOT_FINAL)
     endif
+	cp -f $(UBOOT64_TARGET) $(UBOOT64_FINAL)
 
 bootcode2_target_encrypt: $(SHA_EXE)
 	cp $(BOOTCODE2_BOOT_TARGET) $(BOOTCODE2_BOOT_HASH_TARGET)

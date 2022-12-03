@@ -37,6 +37,7 @@ main(int argc, char * const argv[])
 	char *Hwsetting_header_file_enc="./Bind/hwsetting_header_enc.bin";
 	char *Hwsetting_file="./Bind/hwsetting.bin";
 	char *uboot_file="./Bind/uboot.bin";
+	char *uboot64_file="./Bind/uboot64.bin";
 	char *Rescue_file="./Bind/rescue.bin";
 	char *FSBL_file="./Bind/fsbl.bin";
 	char *FSBL_OS_file="./Bind/fsbl_os.bin";
@@ -62,6 +63,7 @@ main(int argc, char * const argv[])
 	FILE*	ptr_HWsetting_header=NULL;
 	FILE*	ptr_HWsetting=NULL;
 	FILE*	ptr_uboot=NULL;
+	FILE*	ptr_uboot64=NULL;
 	FILE*	ptr_Rescue=NULL;
 	FILE*   ptr_FSBL=NULL;
 	FILE*   ptr_FSBL_OS=NULL;
@@ -83,6 +85,7 @@ main(int argc, char * const argv[])
 	unsigned int mips_romcode_size=0;
 	unsigned int hwsetting_size=0;
 	unsigned int uboot_size=0;
+	unsigned int uboot64_size=0;
 	unsigned int rescue_size=0;
 	unsigned int secure_fsbl_size=0;
 	unsigned int secure_fsbl_os_size=0;
@@ -207,6 +210,7 @@ main(int argc, char * const argv[])
 			ptr_HWsetting_header = fopen(Hwsetting_header_file, "rb");
 	}
 	ptr_uboot = fopen(uboot_file, "rb");
+	ptr_uboot64 = fopen(uboot64_file, "rb");
 	ptr_Rescue = fopen(Rescue_file, "rb");
 	ptr_HWsetting_padding = fopen(Hwsetting_padding_file, "rb");
 	ptr_uboot_padding = fopen(uboot_padding_file, "rb");
@@ -244,6 +248,7 @@ main(int argc, char * const argv[])
 	fseek(ptr_MIPS_romcode, 1, SEEK_END);
 	fseek(ptr_HWsetting, 1, SEEK_END);
 	fseek(ptr_uboot, 1, SEEK_END);
+	fseek(ptr_uboot64, 1, SEEK_END);
 	if(ptr_Rescue) fseek(ptr_Rescue, 1, SEEK_END);
 	if(ptr_FSBL) fseek(ptr_FSBL, 1, SEEK_END);
 	if(ptr_FSBL_OS) fseek(ptr_FSBL_OS, 1, SEEK_END);
@@ -265,6 +270,7 @@ main(int argc, char * const argv[])
 	mips_romcode_size = ftell(ptr_MIPS_romcode)-1;	
 	hwsetting_size = ftell(ptr_HWsetting)-1;	
 	uboot_size = ftell(ptr_uboot)-1;	
+	uboot64_size = ftell(ptr_uboot64)-1;
 	if(ptr_Rescue) rescue_size = ftell(ptr_Rescue)-1;
 	if(ptr_FSBL) secure_fsbl_size = ftell(ptr_FSBL)-1;
 	if(ptr_FSBL_OS) secure_fsbl_os_size = ftell(ptr_FSBL_OS)-1;
@@ -346,6 +352,7 @@ main(int argc, char * const argv[])
  
 	printf("arm romcode size = %08x, mips romcode size = %08x\n", arm_romcode_size,mips_romcode_size);
 	printf("real hwsetting size = %08x, real uboot size = %08x, real rescue size = %08x\n", hwsetting_size,uboot_size,rescue_size);
+	printf("real uboot64 size = %08x\n", uboot64_size);
 	printf("hwsetting padding size = %08x, uboot padding size = %08x, rescue padding size = %08x\n", hwsetting_padding_size,uboot_padding_size,rescue_padding_size);
 	if(ptr_FSBL != NULL)
 		printf("fsbl size = %08x, fsbl padding size = %08x\n", secure_fsbl_size, secure_fsbl_padding_size);
@@ -362,6 +369,7 @@ main(int argc, char * const argv[])
 	fseek(ptr_MIPS_romcode, 0, SEEK_SET);
 	fseek(ptr_HWsetting, 0, SEEK_SET);
 	fseek(ptr_uboot, 0, SEEK_SET);
+	fseek(ptr_uboot64, 0, SEEK_SET);
 	if(ptr_Rescue) fseek(ptr_Rescue, 0, SEEK_SET);
 	if(ptr_FSBL) fseek(ptr_FSBL, 0, SEEK_SET);
 	if(ptr_FSBL_OS) fseek(ptr_FSBL_OS, 0, SEEK_SET);
@@ -406,10 +414,15 @@ main(int argc, char * const argv[])
 			w_ret += fwrite(&secure_rsa_bin_tee_size, 4, 1, ptr_HWsetting_header);
 		else
 			w_ret += fwrite(buf, 4, 1, ptr_HWsetting_header);
+		if (ptr_uboot64)
+			w_ret += fwrite(&uboot64_size, 4, 1, ptr_HWsetting_header);
+		else
+			w_ret += fwrite(buf, 4, 1, ptr_HWsetting_header);
 		if (ptr_Rescue)
 			w_ret += fwrite(&rescue_size, 4, 1, ptr_HWsetting_header);
 		else
 			w_ret += fwrite(buf, 4, 1, ptr_HWsetting_header);
+
 		padding_len = 96-w_ret*4;
 		printf("header write length : %d , padding length : %d\n", w_ret*4, padding_len);
 		for(i=0;i<padding_len;i++)
@@ -607,7 +620,22 @@ main(int argc, char * const argv[])
 	printf("rsa_bin_tee r=%08x, w=%08x\n", tmp_r, tmp_w);
     tmp_r=tmp_w=0;
 	}
-	//10. write rescue
+	//10. write uboot64
+	if (ptr_uboot64){
+	do
+	{
+		ret = fread(buf, 1, 1, ptr_uboot64);	
+		tmp_r+=ret;
+		if (ret > 0)
+		{
+			w_ret = fwrite(buf, ret, 1, ptr_OUT);
+			tmp_w+=w_ret;
+		}
+	} while (ret > 0);
+	printf("uboot64 r=%08x, w=%08x\n", tmp_r, tmp_w);
+    tmp_r=tmp_w=0;
+	}
+	//11. write rescue
 	if (ptr_Rescue){
 	do
 	{
@@ -622,6 +650,7 @@ main(int argc, char * const argv[])
 	printf("rescue r=%08x, w=%08x\n", tmp_r, tmp_w);
     tmp_r=tmp_w=0;
 	}
+	
 error_out:
 	if (ptr_OUT)
 		fclose(ptr_OUT);
@@ -637,6 +666,8 @@ error_out:
 		fclose(ptr_HWsetting);
 	if (ptr_uboot)
 		fclose(ptr_uboot);
+	if (ptr_uboot64)
+		fclose(ptr_uboot64);
 	if (ptr_Rescue)
 		fclose(ptr_Rescue);
 	if (ptr_FSBL)
