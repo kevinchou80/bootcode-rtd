@@ -49,15 +49,23 @@ COBJS-y += cmd_help.o
 COBJS-y += cmd_nvedit.o
 COBJS-y += cmd_version.o
 
+# print64
+#COBJS-y += print64.o
+
 # rtk platform utility
 COBJS-$(CONFIG_CMD_RTKSPI) += cmd_rtkspi.o
 COBJS-$(CONFIG_CMD_RTKRNG) += cmd_rtkrng.o
 COBJS-$(CONFIG_CMD_RTKGPT) += cmd_rtkgpt.o
+COBJS-$(CONFIG_CMD_RTKMKFAT) += cmd_rtkmkfat.o
+COBJS-y += cmd_rtkfdt.o
 #COBJS-y += cmd_freecpu.o
 #COBJS-y += cmd_iotest.o
 COBJS-$(CONFIG_APPLY_CUSTOMIZED_FEATURE) += customized_feature.o
 COBJS-$(CONFIG_SECOND_BOOTCODE_SUPPORT) += cmd_boot2ndbootcode.o
 COBJS-$(CONFIG_GOLDENBOOT_SUPPORT) += goldenboot.o
+
+# WD pingpong
+COBJS-$(CONFIG_CMD_WDPP) += cmd_wdpp.o
 
 # environment
 COBJS-y += env_common.o
@@ -189,6 +197,7 @@ COBJS-$(CONFIG_YAFFS2) += cmd_yaffs2.o
 COBJS-$(CONFIG_CMD_SPL) += cmd_spl.o
 COBJS-$(CONFIG_CMD_ZFS) += cmd_zfs.o
 COBJS-$(CONFIG_CMD_PANEL) += cmd_panel.o
+COBJS-$(CONFIG_CMD_PWM) += cmd_pwm.o
 
 # qc verify
 COBJS-$(CONFIG_CMD_QC) += cmd_qc.o
@@ -241,7 +250,7 @@ SRCS	:= $(COBJS:.o=.c) $(XCOBJS:.o=.c)
 OBJS	:= $(addprefix $(obj),$(COBJS))
 XOBJS	:= $(addprefix $(obj),$(XCOBJS))
 
-CPPFLAGS += -I..
+#CFLAGS += -save-temps
 
 cmd_link_o_target_m = $(if $(strip $1),\
 			$(LD) $(LDFLAGS) -r -o $@ $1 $(STATIC_LIB),\

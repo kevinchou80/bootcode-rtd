@@ -570,18 +570,37 @@ static int do_bdinfo_ddr(void)
 
 #ifdef CONFIG_RTD1295
 	uint ddr_speed_setting = (rtd_inl(0x9800E028) & 0x0000ff00) >> 8;
+	char range_exceed[16] = "";
 
 	switch (ddr_speed_setting) {
-		case 0x24:	ddr_mhz = 2133;	break;
-		case 0x1f:	ddr_mhz = 1866;	break;
-		case 0x1a:	ddr_mhz = 1600;	break;
-		case 0x15:	ddr_mhz = 1333;	break;
-		case 0x0b:	ddr_mhz = 800;	break;
+		case 0x2a ... 0xff:
+			ddr_mhz = 2400;
+			strcpy(range_exceed, "OVER");
+			break;
+		case 0x25 ... 0x29:
+			ddr_mhz = 2400;
+			break;
+		case 0x20 ... 0x24:
+			ddr_mhz = 2133;
+			break;
+		case 0x1b ... 0x1f:
+			ddr_mhz = 1866;
+			break;
+		case 0x16 ... 0x1a:
+			ddr_mhz = 1600;
+			break;
+		case 0x15:
+			ddr_mhz = 1333;
+			break;
+		case 0x0 ... 0x14 :
+			ddr_mhz = 1333;
+			strcpy(range_exceed, "UNDER");
+			break;
 		default:	ddr_mhz = 0;	break;
 	}
 
 #endif
-	printf("DDR        = %u MHz\n", ddr_mhz);
+	printf("DDR        = %s %u MHz (0x%02x)\n",range_exceed, ddr_mhz, ddr_speed_setting);
 	printf("DDR   SIZE =%4d*%d %s %4d MB  (Evaluated from DC1 0x%x/0x%x)\n", get_ddr_size(0),\
 																		     get_ddr_num(),\
 																			 (get_accessible_ddr_size(UNIT_MEGABYTE) == get_ddr_num()* get_ddr_size(0))?"=":"!=",\

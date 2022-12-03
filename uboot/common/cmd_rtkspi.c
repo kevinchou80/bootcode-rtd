@@ -39,11 +39,14 @@
 unsigned int spi_flash_id_idx;
 s_device_type * pspi_flash_type;
 unsigned int spi_flash_min_erase_size;
+unsigned int spi_flash_max_erase_size;
 
 static void spi_switch_read_mode(void)
 {
+    sync();
     rtd_outl(SB2_SFC_OPCODE, 0x00000003); //switch flash to read mode
     rtd_outl(SB2_SFC_CTL, 0x00000018); //command cycle
+    sync();
 }
 
 static void rtkspi_hexdump( const char * str, unsigned int start_address, unsigned int length )
@@ -107,6 +110,36 @@ static unsigned int rtkspi_get_min_erase_size( s_device_type * _pspi_flash_type 
 	return 0; // flash_wp or not support erase
 }
 
+static unsigned int rtkspi_get_max_erase_size( s_device_type * _pspi_flash_type )
+{
+	unsigned int _max_erase_blk_size;
+
+	_max_erase_blk_size = 0;
+
+	if( _pspi_flash_type->sec_256k_en == 1 )
+	{
+		_max_erase_blk_size = (256UL<<10);
+	}
+	else if( _pspi_flash_type->sec_64k_en == 1 )
+	{
+		_max_erase_blk_size = (64UL<<10);
+	}
+	else if( _pspi_flash_type->sec_32k_en == 1 )
+	{
+		_max_erase_blk_size = (32UL<<10);
+	}
+	else if( _pspi_flash_type->sec_4k_en == 1 )
+	{
+		_max_erase_blk_size = (4UL<<10);
+	}
+
+	if( _max_erase_blk_size ) {
+		return _max_erase_blk_size;
+	}
+
+	return 0; // flash_wp or not support erase
+}
+
 int rtkspi_identify( void )
 {
     unsigned int id;
@@ -117,6 +150,7 @@ int rtkspi_identify( void )
     spi_flash_id_idx = 0;
     pspi_flash_type = NULL;
     spi_flash_min_erase_size = 0;
+    spi_flash_max_erase_size = 0;
 
     // configure spi flash controller register
     rtd_outl(SB2_SFC_POS_LATCH,0x00000001);   //set serial flash controller latch data at rising edge
@@ -124,11 +158,12 @@ int rtkspi_identify( void )
     //remove this, due to we already set this register at hw-setting
     //rtd_outl(0xb801a808,0x0101000f);   //lowering frequency, setup freq divided no
 
-    rtd_outl(SB2_SFC_CE,0x00090101);   //setup control edge
+    rtd_outl(SB2_SFC_CE,0x00071307);   //setup control edge
 
     // read Manufacture & device ID
     rtd_outl(SB2_SFC_OPCODE,0x0000009f);
     rtd_outl(SB2_SFC_CTL,0x00000010);
+    sync();
 
     temp_id = rtd_inl(SPI_RBUS_BASE_ADDR);
     id = rtkspi_swap_endian(temp_id);
@@ -147,6 +182,7 @@ int rtkspi_identify( void )
                 /* read extended device ID */
                 rtd_outl(SB2_SFC_OPCODE,0x0000009f);
                 rtd_outl(SB2_SFC_CTL,0x00000013);
+                sync();
 
                 temp_id = rtd_inl(SPI_RBUS_BASE_ADDR);
                 id = rtkspi_swap_endian(temp_id);
@@ -158,6 +194,7 @@ int rtkspi_identify( void )
             pspi_flash_type = &s_device[idx];
             spi_flash_id_idx = (idx | SPI_FLASH_ID_FOUND);
             spi_flash_min_erase_size = rtkspi_get_min_erase_size(pspi_flash_type);
+            spi_flash_max_erase_size = rtkspi_get_max_erase_size(pspi_flash_type);
 
             // show flash info
             printf("sector 256k en: %d\n", pspi_flash_type->sec_256k_en);
@@ -179,6 +216,7 @@ int rtkspi_identify( void )
     {
         rtd_outl(SB2_SFC_OPCODE,0x00000090);  //read id
         rtd_outl(SB2_SFC_CTL,0x00000010);  //issue command
+        sync();
         id = rtd_inl(SPI_RBUS_BASE_ADDR);
         id >>= 16;
 
@@ -192,6 +230,7 @@ int rtkspi_identify( void )
                     /* read extended device ID */
                     rtd_outl(SB2_SFC_OPCODE,0x00000090);
                     rtd_outl(SB2_SFC_CTL,0x0000001b);
+                    sync();
 
                     temp_id = rtd_inl(SPI_RBUS_BASE_ADDR);
                     id = rtkspi_swap_endian(temp_id);
@@ -228,18 +267,21 @@ void rtkspi_init_regs( void )
 
     // need to init again ( ROM code had set up this ? )
     // configure serial flash controller
-    rtd_outl(SB2_SFC_CE,0x00090101);   // setup control edge
+    rtd_outl(SB2_SFC_CE,0x00071307);   // setup control edge
 	mdelay(100);//printf("****** %s %d\n", __FUNCTION__, __LINE__);
     rtd_outl(SB2_SFC_WP,0x00000000);    // disable hardware potection
     // enable write status register
     rtd_outl(SB2_SFC_OPCODE,0x00000050);
     rtd_outl(SB2_SFC_CTL,0x00000000);
+    sync();
+
     tmp = rtd_inb(SPI_RBUS_BASE_ADDR);
     rtd_outb(SPI_RBUS_BASE_ADDR, 0x0);
     // write status register , no memory protection
     rtd_outl(SB2_SFC_OPCODE,0x00000001);
     rtd_outl(SB2_SFC_CTL,0x00000010);
     rtd_outb(SPI_RBUS_BASE_ADDR, 0x0);
+    sync();
 }
 
 void rtkspi_init( void )
@@ -350,11 +392,12 @@ void rtkspi_write8( unsigned int target_address, unsigned int source_address, un
     //add by angus
     rtd_outl(SB2_SFC_EN_WR,     0x00000106);
     rtd_outl(SB2_SFC_WAIT_WR,   0x00000105);
-    rtd_outl(SB2_SFC_CE,        0x00ffffff);
+    rtd_outl(SB2_SFC_CE,        0x00071307);
 
     //issue write command
     rtd_outl(SB2_SFC_OPCODE,    0x00000002);
     rtd_outl(SB2_SFC_CTL,       0x00000018);
+    sync();
 
     mdelay(2); // must do this or rbus will be hanged
 
@@ -372,6 +415,8 @@ void rtkspi_write8( unsigned int target_address, unsigned int source_address, un
     }
 
     spi_switch_read_mode();
+
+    rtd_inb(SPI_RBUS_BASE_ADDR);    // workaground for last byte not be written
 }
 
 int rtkspi_erase( unsigned int spi_offset_address, unsigned int byte_length )
@@ -381,6 +426,7 @@ int rtkspi_erase( unsigned int spi_offset_address, unsigned int byte_length )
     unsigned int end_address;
     unsigned int curr_address;
     unsigned int tmp_cnt;
+    unsigned int erase_size;
 
     if( !spi_flash_min_erase_size ) {
     	printf("*** unknown SPI flash erase size, DO NOTHING ***\n");
@@ -391,7 +437,7 @@ int rtkspi_erase( unsigned int spi_offset_address, unsigned int byte_length )
     end_address   = spi_offset_address + byte_length;
 
     //printf("*** start addr : 0x%08x\n", start_address);
-    //printf("*** e n d addr : 0x%08x\n", end_address);
+    //printf("*** end addr : 0x%08x\n", end_address);
 
     // set aligment
     start_address &= ~(spi_flash_min_erase_size-1);
@@ -399,49 +445,64 @@ int rtkspi_erase( unsigned int spi_offset_address, unsigned int byte_length )
     end_address   += (spi_flash_min_erase_size-1);
     end_address   &= ~(spi_flash_min_erase_size-1);
 
-    //printf("*** start addr : 0x%08x\n", start_address);
-    //printf("*** e n d addr : 0x%08x\n", end_address);
+    printf("min erase size : 0x%08x\n", spi_flash_min_erase_size);
+    printf("*** adjust start addr : 0x%08x\n", start_address);
+    printf("*** adjust end addr : 0x%08x\n", end_address);
 
     //disable auto-prog
 	rtd_outl(SB2_SFC_EN_WR,    0x00000006);
 	rtd_outl(SB2_SFC_WAIT_WR,    0x00000005);
+    sync();
 
 	curr_address = start_address;
 
 	while( curr_address < end_address )
     {
+        // addr align max erase size
+        if (((curr_address & (spi_flash_max_erase_size - 1)) == 0)  &&  
+            ((curr_address + spi_flash_max_erase_size) <= end_address)) {
+            erase_size = spi_flash_max_erase_size;
+        }
+        else {
+            erase_size = spi_flash_min_erase_size;
+        }
+    
         printf("e");
 
         // write enable
         rtd_outl(SB2_SFC_OPCODE,0x00000006);
         mdelay(1); // work around for GD25Q80C_08Mbit
         rtd_outl(SB2_SFC_CTL,0x00000000);
+        sync();
 
         tmp_sts = rtd_inb(curr_address);
 
 		do {
-			if( spi_flash_min_erase_size == (256UL<<10) )
+			if( erase_size == (256UL<<10) )
             {
                 rtd_outl(SB2_SFC_OPCODE,0x000000d8);
                 rtd_outl(SB2_SFC_CTL,0x00000008);
+                sync();
                 tmp_sts = rtd_inb(curr_address);
                 break;
             }
-			else if( spi_flash_min_erase_size == (64UL<<10) )
+			else if( erase_size == (64UL<<10) )
             {
                 rtd_outl(SB2_SFC_OPCODE,0x000000d8);
             	rtd_outl(SB2_SFC_CTL,0x00000008);
+                sync();
             	tmp_sts = rtd_inb(curr_address);
                 break;
             }
-			else if( spi_flash_min_erase_size == (32UL<<10) )
+			else if( erase_size == (32UL<<10) )
             {
             	rtd_outl(SB2_SFC_OPCODE,0x00000052);
                 rtd_outl(SB2_SFC_CTL,0x00000008);
+                sync();
                 tmp_sts = rtd_inb(curr_address);
                 break;
             }
-			else if( spi_flash_min_erase_size == (4UL<<10) )
+			else if( erase_size == (4UL<<10) )
             {
             	if (pspi_flash_type->id==PMC_4Mbit) {
                     rtd_outl(SB2_SFC_OPCODE,0x000000d7);
@@ -450,14 +511,16 @@ int rtkspi_erase( unsigned int spi_offset_address, unsigned int byte_length )
                     rtd_outl(SB2_SFC_OPCODE,0x00000020);
                 }
                 rtd_outl(SB2_SFC_CTL,0x00000008);
+                sync();
                 tmp_sts = rtd_inb(curr_address);
                 break;
             }
 
-		    printf("*** erase size(0x%08x) not support\n", spi_flash_min_erase_size);
+		    printf("*** erase size(0x%08x) not support\n", erase_size);
 			//enable auto-prog
 			rtd_outl(SB2_SFC_EN_WR,    0x00000106);
         	rtd_outl(SB2_SFC_WAIT_WR,    0x00000105);
+            sync();
             return -1;
 		}
 		while(0);
@@ -474,10 +537,11 @@ int rtkspi_erase( unsigned int spi_offset_address, unsigned int byte_length )
             tmp_cnt++;
             rtd_outl(SB2_SFC_OPCODE,0x00000005);
             rtd_outl(SB2_SFC_CTL,0x00000010);
+            sync();
             tmp_sts = rtd_inb(curr_address);
         } while(tmp_sts&0x1);
 
-        curr_address += spi_flash_min_erase_size;
+        curr_address += erase_size;
     }
 
     printf("\n");
@@ -485,6 +549,7 @@ int rtkspi_erase( unsigned int spi_offset_address, unsigned int byte_length )
 	//enable auto-prog
 	rtd_outl(SB2_SFC_EN_WR,    0x00000106);
     rtd_outl(SB2_SFC_WAIT_WR,    0x00000105);
+    sync();
 
     spi_switch_read_mode();
 

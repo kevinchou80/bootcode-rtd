@@ -129,10 +129,10 @@ typedef struct{
 	unsigned int 	Kpublic_fw_addr;
 	unsigned int 	Kpublic_tee_addr;
 	
-	unsigned char * bootcode_img64_saddr;
-	unsigned int 	bootcode_img64_size;
-	unsigned char * jumper_saddr;
-	unsigned int 	jumper_size;
+	//unsigned char * bootcode_img64_saddr;
+	//unsigned int 	bootcode_img64_size;
+	//unsigned char * jumper_saddr;
+	//unsigned int 	jumper_size;
 } __attribute__((aligned(8))) t_extern_param;
 
 extern t_extern_param *ext_para_ptr;

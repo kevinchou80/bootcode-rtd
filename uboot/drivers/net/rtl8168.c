@@ -5540,8 +5540,74 @@ int rtl8168_initialize(bd_t *bis)
 
         card_number++;
 		
-        // LED setting
-        rtd_outl((REG_BASE+CustomLED),0x000670ca);			
+        // WD LED setting
+        rtd_outl((REG_BASE+CustomLED),0x0006804F);			
+
+	// switch Mux to Ethernet LED RXTX/LINK mode.	
+	tmp = rtd_inl(0x98007310);
+	tmp |= (BIT_28 | BIT_26);
+	rtd_outl(0x98007310, tmp);
+
+        tmp = (rtd_inl(0x98007028) & BIT_11) >> 11;
+        if (tmp == 0) {
+            // 1295 switch IGPIO30 pin mux and out direction 
+            tmp = rtd_inl(0x98007100);
+            tmp |= BIT_30;
+            rtd_outl(0x98007100, tmp);
+
+            tmp = rtd_inl(0x98007104);
+            tmp |= BIT_30;
+            rtd_outl(0x98007104, tmp);
+        }
+	else{
+            // 1296 switch IGPIO32 pin mux and out direction
+            tmp = rtd_inl(0x98007118);
+            tmp |= BIT_0;
+            rtd_outl(0x98007118, tmp);
+
+            tmp = rtd_inl(0x9800711c);
+            tmp |= BIT_0;
+            rtd_outl(0x9800711c, tmp);
+        }		
+
+        // fine tune embedded GPHY
+        mdio_write(tp, 0x1f, 0x0BC0);
+        mdio_write(tp, 0x11, 0x0B10);
+        mdio_write(tp, 0x1f, 0x0A43);
+        mdio_write(tp, 0x1b, 0x8082);
+        mdio_write(tp, 0x1c, 0xFE00);
+
+        // workaround to avoid empty efuse
+        // check RC-K in efuse
+        tmp = ((rtd_inl(0x980171c0) & BIT_0) << 3) | ((rtd_inl(0x980171bc) & (BIT_31 | BIT_30 | BIT_29)) >> 29);
+        if (tmp == 0) {
+            // set default value 0xB
+            mdio_write(tp, 0x1f, 0x0BCD);
+            mdio_write(tp, 22, 0xBBBB);
+            mdio_write(tp, 23, 0xBBBB);
+        }
+        // check R-K in efuse
+        tmp = (rtd_inl(0x980171bc) & (BIT_28 | BIT_27 | BIT_26 | BIT_25)) >> 25;
+        if (tmp == 0) {
+            // set default value 0x6
+            mdio_write(tp, 0x1f, 0x0BCE);
+            mdio_write(tp, 16, 0x6666);
+            mdio_write(tp, 17, 0x6666);
+        }
+        // check Amp-K in efuse
+        tmp = (rtd_inl(0x980171b8) & 0x03fffc00) >> 10;
+        if (tmp == 0) {
+            // set default value 0x7799
+            mdio_write(tp, 0x1f, 0x0BCA);
+            mdio_write(tp, 22, 0x7799);
+        }
+        // check Bias-K in efuse
+        tmp = ((rtd_inl(0x980171bc) & 0x3ff) << 6) | ((rtd_inl(0x980171b8) & 0xfc000000) >> 26);
+        if (tmp == 0) {
+            // set default value 0xA899
+            mdio_write(tp, 0x1f, 0x0BCF);
+            mdio_write(tp, 22, 0xA899);
+        }
     }
 
     return card_number;

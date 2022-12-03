@@ -36,6 +36,8 @@
 #include <malloc.h>		/* for free() prototype */
 #endif
 #include <asm/arch/fw_info.h>
+#include <asm/arch/rbus/iso_reg.h>
+#include <asm/arch/io.h>
 
 #ifdef CONFIG_SYS_HUSH_PARSER
 #include <hush.h>
@@ -52,6 +54,21 @@
 #ifdef CONFIG_FT_TEST
 #include <ft_test.h>
 #endif
+
+#include <asm/arch/pwm.h>
+
+/******* REBOOT ACTION, sync with kernel rtd129x_restart.c **********/
+#define REBOOT_ACTION_ADDR	(ISO_NORST_SWC)
+#define REBOOT_ACTION_MASK	(0xff)
+#define REBOOT_MAGIC		0xaabbcc00
+#define REBOOT_MAGIC_SHIFT	8
+#define REBOOT_ACTION_VALID(v)	!((REBOOT_MAGIC ^ (v)) >> REBOOT_MAGIC_SHIFT)
+
+typedef enum{
+	RESET_ACTION_NO_ACTION = 0,
+	RESET_ACTION_FASTBOOT,
+}RESET_ACTION;
+/****** REBOOT ACTION END *******/
 
 typedef struct _bootloader_message {
     char command[32];
@@ -406,6 +423,27 @@ start = get_timer(0);
 			abort = 1; // don't auto boot
 		}
 #endif
+
+        /**
+           @WD_Changes_begin
+           Power On reset to force the device enter
+           Image Recover Mode which booting the device
+           from USB stick
+         **/
+        if(!getISOGPIO(FACTORY_RST_BTN)) { // check if the reset button is pressed
+            printf("\nPress USB-Install Button\n"); // print the message
+            //            rtd129x_pwm_init();
+            pwm_set_freq(SYS_LED_PWM_PORT_NUM, 1);  // set the frequency to 1 HZ
+            pwm_set_duty_rate(SYS_LED_PWM_PORT_NUM, 50);
+            pwm_enable(SYS_LED_PWM_PORT_NUM, 1);
+            setenv("rescue_cmd", "go ru"); //set the environment variable rescue_cmd=go ru
+            boot_mode = BOOT_RESCUE_MODE; // set the boot_mode
+            abort = 1; // don't auto boot
+        }
+        /**
+           @WD_Changes_end
+         **/
+        
 #if 0//defined(CONFIG_SYS_IR_SUPPORT)		
 //		if( rtd_readbits(IR_SR_reg, _BIT0)){	
 //            printf("\nGet IR\n");			
@@ -695,6 +733,32 @@ start = get_timer(0);
 # endif	/* CONFIG_AUTOBOOT_KEYED */
 #endif	/* CONFIG_BOOTDELAY >= 0  */
 
+void check_reset_reason(void)
+{
+	unsigned int reboot_action;
+
+	reboot_action = rtd_inl(REBOOT_ACTION_ADDR);
+	if (REBOOT_ACTION_VALID(reboot_action)) {
+		printf("*** Reboot-Action : 0x%08x ***\n", reboot_action);
+	} else {
+		printf("*** Reboot-Action invalid ***\n");
+		return;
+	}
+
+	switch (reboot_action & REBOOT_ACTION_MASK) {
+		case RESET_ACTION_FASTBOOT:
+			printf("REBOOT_ACTION : ENTER fastboot mode\n");
+			setenv("bootcmd", "fastboot");
+			break;
+		case RESET_ACTION_NO_ACTION:
+			printf("REBOOT_ACTION : No Action\n");
+			break;
+		default:
+			break;
+	}
+
+	rtd_outl(REBOOT_ACTION_ADDR, REBOOT_MAGIC);
+}
 /****************************************************************************/
 
 void main_loop (void)
@@ -816,6 +880,8 @@ void main_loop (void)
 		printf("[WARN] bootcmd in env is NULL.\n");
 		printf("[WARN] you need to execute \"env default -f\" to reset env.\n");
 	}
+
+	check_reset_reason();
 
 	if (bootdelay >= 0 && s && !abortboot (bootdelay)) {
 #ifdef CONFIG_AUTOBOOT_KEYED

@@ -691,7 +691,7 @@ static int vsnprintf_internal(char *buf, size_t size, const char *fmt,
 			continue;
 		}
 		if (qualifier == 'L')  /* "quad" for 64 bit variables */
-			num = va_arg(args, unsigned long long);	
+			num = va_arg(args, unsigned long long);
 		else if (qualifier == 'l') {
 			num = va_arg(args, unsigned long);
 			if (flags & SIGN)

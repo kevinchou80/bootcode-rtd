@@ -178,9 +178,9 @@
 /* Bootcode Feature: Rescue linux read from USB */
 #define CONFIG_RESCUE_FROM_USB
 #ifdef CONFIG_RESCUE_FROM_USB
-	#define CONFIG_RESCUE_FROM_USB_VMLINUX		"emmc.uImage"
-	#define CONFIG_RESCUE_FROM_USB_DTB		"rescue.emmc.dtb"
-	#define CONFIG_RESCUE_FROM_USB_ROOTFS		"rescue.root.emmc.cpio.gz_pad.img"
+	#define CONFIG_RESCUE_FROM_USB_VMLINUX      "sata.uImage"
+	#define CONFIG_RESCUE_FROM_USB_DTB          "rescue.sata.dtb"
+	#define CONFIG_RESCUE_FROM_USB_ROOTFS		"rescue.root.sata.cpio.gz_pad.img"
 	#define CONFIG_RESCUE_FROM_USB_AUDIO_CORE	"bluecore.audio"
 #endif /* CONFIG_RESCUE_FROM_USB */
 
@@ -192,6 +192,7 @@
 	#define CONFIG_DWC_AHSATA_BASE_ADDR     0x9803F000
 	#define CONFIG_LBA48
 	#define CONFIG_LIBATA
+	#define CONFIG_PORT0_POWER_PIN			18
 #endif
 
 #endif /* __CONFIG_RTK_RTD1295_QA_SPI_H */

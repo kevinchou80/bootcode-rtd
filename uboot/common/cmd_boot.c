@@ -43,7 +43,7 @@
 #include <sata.h>
 #endif
 #include <rtkspi.h>
-
+ 
 #ifdef CONFIG_LZMA
 #include <lzma/LzmaTypes.h>
 #include <lzma/LzmaDec.h>
@@ -66,8 +66,29 @@ typedef struct _bootloader_message {
 //#define BYPASS_CHECKSUM
 //#define EMMC_BLOCK_LOG
 
+#define DEFAULT_SN "FFFFFFFFFFFF"
+
+#define UBOOT_PINGPONG_NEW_DESIGN
+#ifdef UBOOT_PINGPONG_NEW_DESIGN
+#define msleep(a)		udelay(a * 1000)
+// Boot config file is in following format:
+// bootstate:nbr:bna
+#define BOOT_CONFIG_FILE_NAME "bootConfig"
+
+#endif
+
 DECLARE_GLOBAL_DATA_PTR;
 
+
+typedef enum{
+	BOOT_STATE_NO_OTA=0,
+	BOOT_STATE_INIT,
+	BOOT_STATE_OTA_TRIGGERED,
+	BOOT_STATE_OTA_PASSED,
+	BOOT_STATE_OTA_FAILED,
+	BOOT_STATE_RECOVERY,
+	BOOT_STATE_UNKNOWN
+}BOOT_STATE_T;
 
 typedef enum{
 	BOOT_FROM_USB_DISABLE,
@@ -79,6 +100,23 @@ typedef enum{
 	BOOT_FROM_FLASH_NORMAL_MODE,
 	BOOT_FROM_FLASH_MANUAL_MODE
 }BOOT_FROM_FLASH_T;
+
+struct boot_config {
+    BOOT_STATE_T bState;
+    int numBootAttempts; // 1 ~ 5
+    char nextBootRegion; //A or B
+};
+
+typedef enum {
+    BOOT_CFG_STR_STATE=0,
+    BOOT_CFG_STR_NBR,
+    BOOT_CFG_STR_BNA,
+    BOOT_CFG_STR_DONE
+}BOOT_CFG_STR_T;
+
+int gUSB_MODE = 0;
+
+static struct boot_config gBootConfig = {0};
 
 #if defined(CONFIG_RTD1195) || defined(CONFIG_RTD1295)
 
@@ -141,6 +179,7 @@ static int rtk_call_bootm(void);
 int decrypt_image(char *src, char *dst, uint length, uint *key);
 int rtk_get_secure_boot_type(void);
 void rtk_hexdump( const char * str, unsigned char * pcBuf, unsigned int length );
+void GetKeyFromSRAM(unsigned int sram_addr, unsigned char* key, unsigned int length);
 
 static void reset_shared_memory(void);
 
@@ -205,17 +244,49 @@ static unsigned long do_go_all_fw(void)
 }
 #endif 
 
+static void led_flag_error(void)
+{
+    pwm_enable(SYS_LED_PWM_PORT_NUM, 0);            
+    // Ok, the hdd is having issue, change the LED to tell the end user.
+    pwm_set_freq(SYS_LED_PWM_PORT_NUM, 10);  // set the frequency to 1 HZ
+    pwm_set_duty_rate(SYS_LED_PWM_PORT_NUM, 50);
+    pwm_enable(SYS_LED_PWM_PORT_NUM, 1);
+}
+    
+// 
+// hdd must be ready before we could mount the config partition
+//
+static int is_sata_initialized(void)
+{
+#ifdef CONFIG_BOARD_WD_PELICAN
+	// config partition is on the eMMC for Pelican
+	return 1;
+#else
+	if (sata_curr_device == -1) {
+		if (sata_initialize() !=0) {
+            printf("Error, SATA device initialization failed!\n");
+            led_flag_error();
+			return 0;
+		}
+	}
+	return 1;
+#endif
+}
+
+
 #ifdef CONFIG_RESCUE_FROM_USB
 int rtk_decrypt_rescue_from_usb(char* filename, unsigned int target)
 {
 	char tmpbuf[128];
 	unsigned char ks[16],kh[16],kimg[16];
+    unsigned char aes_key[16],rsa_key[256];
+    unsigned int real_body_size = 0;
 #ifdef CONFIG_CMD_KEY_BURNING
 	unsigned int * Kh_key_ptr = NULL; 
 #else
 	unsigned int * Kh_key_ptr = Kh_key_default; 
 #endif
-	unsigned int img_truncated_size = RSA_SIGNATURE_LENGTH; // install_a will append 256-byte signature data to it
+	unsigned int img_truncated_size = RSA_SIGNATURE_LENGTH*2+NP_INV32_LENGTH; // install_a will append 256-byte signature data to it
 	int ret;
 	unsigned int image_size=0;
 	
@@ -234,6 +305,14 @@ int rtk_decrypt_rescue_from_usb(char* filename, unsigned int target)
 	memset(kh,0x00,16);
 	memset(kimg,0x00,16);
 
+    memset(aes_key,0x00,16);
+	memset(rsa_key,0x00,256);
+
+    GetKeyFromSRAM(KH_P_SRAM_ADDR, aes_key, AES_KEY_SIZE);
+    GetKeyFromSRAM(RSA_KEY_FW_SRAM_ADDR, rsa_key, RSA_KEY_SIZE);
+    flush_cache((unsigned int) aes_key, AES_KEY_SIZE);
+    flush_cache((unsigned int) rsa_key, RSA_KEY_SIZE);
+
 #ifdef CONFIG_CMD_KEY_BURNING
 	OTP_Get_Byte(OTP_K_S, ks, 16);
 	OTP_Get_Byte(OTP_K_H, kh, 16);
@@ -245,19 +324,20 @@ int rtk_decrypt_rescue_from_usb(char* filename, unsigned int target)
 	flush_cache((unsigned int) kimg, 16);
 	sync();
 	
-	Kh_key_ptr = kimg;    
-	Kh_key_ptr[0] = swap_endian(Kh_key_ptr[0]);
-	Kh_key_ptr[1] = swap_endian(Kh_key_ptr[1]);
-	Kh_key_ptr[2] = swap_endian(Kh_key_ptr[2]);
-	Kh_key_ptr[3] = swap_endian(Kh_key_ptr[3]);
-	flush_cache((unsigned int) kimg, 16);
+	//Kh_key_ptr = kimg;    
+	//Kh_key_ptr[0] = swap_endian(Kh_key_ptr[0]);
+	//Kh_key_ptr[1] = swap_endian(Kh_key_ptr[1]);
+	//Kh_key_ptr[2] = swap_endian(Kh_key_ptr[2]);
+	//Kh_key_ptr[3] = swap_endian(Kh_key_ptr[3]);
+    Kh_key_ptr = aes_key; 
+	flush_cache((unsigned int) aes_key, 16);
 								
-		// decrypt image
+    // decrypt image
 	printf("to decrypt...\n");						
 	flush_cache((unsigned int) ENCRYPTED_FW_ADDR, image_size);
 	if (decrypt_image((char *)ENCRYPTED_FW_ADDR,
 		(char *)target,
-		image_size,
+		image_size - img_truncated_size,
 		Kh_key_ptr))
 	{
 		printf("decrypt image:%s error!\n", filename);
@@ -269,12 +349,16 @@ int rtk_decrypt_rescue_from_usb(char* filename, unsigned int target)
 	memset(kh,0x00,16);
 	memset(kimg,0x00,16);
 		
-
+    copy_memory(target + image_size - img_truncated_size, ENCRYPTED_FW_ADDR + image_size - img_truncated_size, img_truncated_size);
 	flush_cache((unsigned int) target, image_size);
+	real_body_size = (UINT32)(REG32(target + (image_size - img_truncated_size) - 4));
+    real_body_size = swap_endian(real_body_size);
+	real_body_size /= 8;
+    
 	ret = Verify_SHA256_hash( (unsigned char *)target,
-							image_size - img_truncated_size,
+							real_body_size,
 							(unsigned char *)(target + image_size - img_truncated_size),
-							1 );						  
+							1, rsa_key);						  
 	if( ret < 0 ) {
 		printf("[ERR] %s: verify hash fail(%d)\n", __FUNCTION__, ret );
 		return RTK_PLAT_ERR_READ_FW_IMG;
@@ -283,6 +367,137 @@ int rtk_decrypt_rescue_from_usb(char* filename, unsigned int target)
 	return RTK_PLAT_ERR_OK;
 }
 
+//adam 0729 start 
+//add a boot rescue function from dhcp tftp
+#define CURRENT_GPT_VER 3
+#ifdef CONFIG_RESCUE_FROM_DHCP
+int boot_rescue_from_dhcp(void)
+{
+	char tmpbuf[128];
+	int ret = RTK_PLAT_ERR_OK;
+	char *filename;
+	char *dhcp_server_ip;
+	unsigned int secure_mode=0;
+	
+	secure_mode = rtk_get_secure_boot_type();
+
+    if (!is_sata_initialized()) {
+        // initialization sata failed.
+		return RTK_PLAT_ERR_BOOT;
+	}
+
+	// generate the partition table
+    // ey: gpt table should be visioned instead of by date
+	// generate the partition table
+    run_command("rtkgpt gen V3", 0);
+    char gpt_ver_str[8];
+    sprintf(gpt_ver_str, "%d", CURRENT_GPT_VER);
+    setenv("gpt_ver", gpt_ver_str);
+    run_command("env save", 0);
+    
+	/* DTB */	
+	if ((filename = getenv("rescue_dtb")) == NULL) {
+		filename =(char*) CONFIG_RESCUE_FROM_USB_DTB;
+	}
+
+	dhcp_server_ip =(char*) CONFIG_BOOTP_SERVERIP;
+
+	sprintf(tmpbuf, "dhcp %s %s:%s", getenv("fdt_loadaddr"),dhcp_server_ip, filename);
+	if (run_command(tmpbuf, 0) != 0) {
+		goto loading_failed;
+	}
+
+	printf("Loading \"%s\" to %s is OK.\n\n", filename, getenv("fdt_loadaddr"));
+
+	/* Linux kernel */
+	if ((filename = getenv("rescue_vmlinux")) == NULL) {
+		filename =(char*) CONFIG_RESCUE_FROM_USB_VMLINUX;
+	}
+
+	if(secure_mode == RTK_SECURE_BOOT)
+	{	
+		if (rtk_decrypt_rescue_from_usb(filename,getenv_ulong("kernel_loadaddr", 16, 0)))
+		goto loading_failed;	
+	}	
+	else
+	{	
+		sprintf(tmpbuf, "dhcp %s %s:%s", getenv("kernel_loadaddr"), dhcp_server_ip, filename);
+		if (run_command(tmpbuf, 0) != 0) {
+			goto loading_failed;
+		}
+	}
+
+	printf("Loading \"%s\" to %s is OK.\n\n", filename, getenv("kernel_loadaddr"));
+
+	/* rootfs */
+	if ((filename = getenv("rescue_rootfs")) == NULL) {
+		filename =(char*) CONFIG_RESCUE_FROM_USB_ROOTFS;
+	}
+
+
+	if(secure_mode == RTK_SECURE_BOOT)
+	{	
+		if (rtk_decrypt_rescue_from_usb(filename, getenv_ulong("rootfs_loadaddr", 16, 0)))
+		goto loading_failed;	
+	}	
+	else
+	{
+
+		sprintf(tmpbuf, "dhcp %s %s:%s", getenv("rootfs_loadaddr"), dhcp_server_ip, filename);
+		if (run_command(tmpbuf, 0) != 0) {
+			goto loading_failed;
+		}
+	}
+
+	printf("Loading \"%s\" to %s is OK.\n\n", filename, getenv("rootfs_loadaddr"));
+
+
+	/* audio firmware */
+	if ((filename = getenv("rescue_audio")) == NULL) {
+		filename =(char*) CONFIG_RESCUE_FROM_USB_AUDIO_CORE;
+	}
+	if(secure_mode == RTK_SECURE_BOOT)
+	{	
+		if (!rtk_decrypt_rescue_from_usb(filename, MIPS_AUDIO_FW_ENTRY_ADDR))
+		{
+			printf("Loading \"%s\" to 0x%08x is OK.\n", filename, MIPS_AUDIO_FW_ENTRY_ADDR);
+			run_command("go a", 0);
+		}
+		else
+			printf("Loading \"%s\" from USB failed.\n", filename);
+			/* Go on without Audio firmware. */	
+	}	
+	else
+	{	
+		sprintf(tmpbuf, "dhcp 0x%08x %s:%s", MIPS_AUDIO_FW_ENTRY_ADDR, dhcp_server_ip, filename);
+
+		if (run_command(tmpbuf, 0) == 0) {
+			printf("Loading \"%s\" to 0x%08x is OK.\n", filename, MIPS_AUDIO_FW_ENTRY_ADDR);
+			run_command("go a", 0);
+		}
+		else {
+			printf("Loading \"%s\" from dhcp failed.\n", filename);
+			/* Go on without Audio firmware. */
+		}
+    }
+	boot_mode = BOOT_RESCUE_MODE;
+
+	/* Clear the HYP ADDR since we don't want rescue jump to HYP mode */
+	if (getenv("hyp_loadaddr"))
+		setenv("hyp_loadaddr", "");
+
+	ret = rtk_call_bootm();
+	/* Should not reach here */
+
+	return ret;
+
+loading_failed:
+	printf("Loading \"%s\" from dhcp host %s failed.\n", filename, dhcp_server_ip);
+	return RTK_PLAT_ERR_READ_RESCUE_IMG;	
+}
+//adam 0729 end
+#endif
+
 int boot_rescue_from_usb(void)
 {
 	char tmpbuf[128];
@@ -290,6 +505,8 @@ int boot_rescue_from_usb(void)
 	char *filename;
 	unsigned int secure_mode=0;
 	
+	printf("==== %s =====\n", __func__);
+
 	secure_mode = rtk_get_secure_boot_type();
 
 	run_command("usb start", 0);	/* "usb start" always return 0 */
@@ -298,6 +515,18 @@ int boot_rescue_from_usb(void)
 		return RTK_PLAT_ERR_READ_RESCUE_IMG;
 	}
 
+    filename = "wd_uboot.bin";
+	sprintf(tmpbuf, "fatload usb 0:1 0x1500000 %s", filename);
+	if (run_command(tmpbuf, 0) == 0){
+        pwm_set_freq(SYS_LED_PWM_PORT_NUM, 20);  // set the frequency to 1 HZ
+        pwm_set_duty_rate(SYS_LED_PWM_PORT_NUM, 50);
+        pwm_enable(SYS_LED_PWM_PORT_NUM, 1);
+		printf("Loading \"%s\" to 0x1500000 is OK.\n\n", filename);
+        run_command_list("go 0x1500000", -1, 0);
+	}else{
+		printf("Loading \"%s\" from USB failed. Continue installing OS images\n", filename);
+	}
+        
 	/* DTB */	
 	if ((filename = getenv("rescue_dtb")) == NULL) {
 		filename =(char*) CONFIG_RESCUE_FROM_USB_DTB;
@@ -423,6 +652,45 @@ unsigned long do_go_exec (ulong (*entry)(int, char * const []), int argc, char *
 	return entry (argc, argv);
 }
 
+
+int reflash_bootloader(int argc, char * const argv[])
+{
+	char tmpbuf[128];
+	int ret = RTK_PLAT_ERR_OK;
+	char *filename;
+	unsigned int secure_mode = 0;
+	ulong	addr;
+
+	printf("==== %s =====\n", __func__);
+
+	secure_mode = rtk_get_secure_boot_type();
+
+	run_command("usb start", 0);	/* "usb start" always return 0 */
+	if (run_command("usb dev", 0) != 0) {
+		printf("No USB device found!\n");
+		return RTK_PLAT_ERR_READ_RESCUE_IMG;
+	}
+
+	/* load uboot.bin */
+	filename = "uboot.bin";
+	sprintf(tmpbuf, "fatload usb 0:1 %s %s", "0x01500000", filename);
+	if (run_command(tmpbuf, 0) != 0) {
+		goto loading_failed;
+	}
+
+	addr = simple_strtoul("0x1500000", NULL, 16);
+	do_go_exec((void *)addr, argc -1 , argv + 1 );
+
+
+	return ret;
+
+loading_failed:
+	printf("Loading \"%s\" from USB failed.\n", filename);
+	return RTK_PLAT_ERR_READ_RESCUE_IMG;
+}
+
+
+
 int do_go (cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 {
 	ulong	addr, rc;
@@ -517,6 +785,10 @@ int do_go (cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 			boot_mode = BOOT_ANDROID_MODE;
 			return rtk_plat_boot_handler();					
 		}
+		else if (argv[1][1] == 'b')
+		{
+			return reflash_bootloader(argc, argv);
+		}
 #ifdef CONFIG_RESCUE_FROM_USB
 		else if (argv[1][1] == 'u') // rescue from usb
 		{
@@ -560,6 +832,14 @@ int do_go (cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 	return rcode;
 }
 
+int do_goru (cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+{
+	//boot_mode = BOOT_CONSOLE_MODE;
+	WATCHDOG_DISABLE();
+	setenv("bootcmd", "bootr");
+	return boot_rescue_from_usb();
+}
+
 /* -------------------------------------------------------------------- */
 
 U_BOOT_CMD(
@@ -580,6 +860,14 @@ U_BOOT_CMD(
 	"\tsgboot - go golden rescue boot flow(BOOT_GOLD_MODE)\n"
 	"\tinfo   - show curren mode info\n"
 	"\t[arg]  - passing 'arg' as arguments\n"
+);
+
+/* -------------------------------------------------------------------- */
+
+U_BOOT_CMD(
+	goru, CONFIG_SYS_MAXARGS, 1,	do_goru,
+	"start rescue linux from usb",
+	""
 );
 
 #endif
@@ -657,6 +945,17 @@ int decrypt_image(char *src, char *dst, uint length, uint *key)
 
 	printf("decrypt from 0x%08x to 0x%08x, len:0x%08x\n", (uint)src, (uint)dst, length);
 
+    if (length & 0xf) {
+        printf("%s %d, fail\n", __FUNCTION__, __LINE__);
+        return -1;
+    }
+
+    if (AES_ECB_decrypt((uchar *)src, length, (uchar *)dst, key)) {
+		printf("%s %d, fail\n", __FUNCTION__, __LINE__);
+		return -1;
+	}
+
+#if 0
 	// get short block size
 	sblock_len = length & 0xf;
 
@@ -664,6 +963,7 @@ int decrypt_image(char *src, char *dst, uint length, uint *key)
 		printf("%s %d, fail\n", __FUNCTION__, __LINE__);
 		return -1;
 	}
+	
 
 	// handle short block (<16B)
 	if (sblock_len) {
@@ -680,6 +980,7 @@ int decrypt_image(char *src, char *dst, uint length, uint *key)
 		for (i = 0; i < sblock_len; i++)
 			sblock_dst[i] ^= sblock_src[i];
 	}
+#endif
 
 	return 0;
 }
@@ -1097,31 +1398,71 @@ int rtk_preload_bootimages_emmc(void)
 #ifdef CONFIG_RTKSPI
 int rtk_preload_bootimages_spi(void)
 {
-	unsigned int iSPI_base_addr;
 	unsigned int img_addr;
+	unsigned int iSPI_base_addr;
+	unsigned int iSPI_bl31_addr;
+	unsigned int iSPI_bl31_size;
+	unsigned int iSPI_uboot64_addr;
+	unsigned int iSPI_uboot64_size;
 
 	img_addr = getenv_ulong("bootcode2ndtmp_loadaddr", 16, 0);
-	t_extern_param param;
+	fw_hw_setting_header_t hw_setting_header;
 
-	iSPI_base_addr = SPI_RBUS_BASE_ADDR + 0x00020000; // Parameter
-
-	// read parameter
-	rtkspi_read32( &param, iSPI_base_addr, sizeof(t_extern_param));
+	// read hwsetting header
+	iSPI_base_addr = SPI_RBUS_BASE_ADDR + 0x00020000 + 0x800; // HW settubg base
+	rtkspi_read32( &hw_setting_header, iSPI_base_addr, sizeof(fw_hw_setting_header_t));
+	
+	printf("%s : header info\n", __func__);
+	printf(" 0x%08x 0x%08x 0x%08x 0x%08x\n", hw_setting_header.hwsetting_size
+	                                       , hw_setting_header.bootloader_size
+	                                       , hw_setting_header.fsbl_size
+	                                       , hw_setting_header.secure_os_size);
+	printf(" 0x%08x 0x%08x 0x%08x 0x%08x\n", hw_setting_header.atf_bl31_size
+	                                       , hw_setting_header.Kpublic_fw_size
+	                                       , hw_setting_header.Kpublic_tee_size
+	                                       , hw_setting_header.bootloader64_size);
+	printf(" 0x%08x\n", hw_setting_header.rescue_size);	                                       
 	
 	// read uboot64
-	if( param.bootcode_img64_size ) {
-		printf("%s : load U-Boot 64 from 0x%08x to 0x%08x with size 0x%08x\n", __func__, param.bootcode_img64_saddr, img_addr, param.bootcode_img64_size);
-		rtkspi_read32( img_addr, param.bootcode_img64_saddr, param.bootcode_img64_size);
+	iSPI_bl31_addr = (hw_setting_header.hwsetting_size + 96 + 32) +
+	                 (hw_setting_header.bootloader_size + 32 );
+	iSPI_uboot64_addr = (hw_setting_header.hwsetting_size + 96 + 32) +
+	                    (hw_setting_header.bootloader_size + 32 );
+	if( hw_setting_header.fsbl_size ) {
+		iSPI_bl31_addr += (hw_setting_header.fsbl_size + 32);
+	    iSPI_uboot64_addr += (hw_setting_header.fsbl_size + 32);
+	}
+	if( hw_setting_header.secure_os_size ) {
+		iSPI_bl31_addr += (hw_setting_header.secure_os_size + 32);
+	    iSPI_uboot64_addr += (hw_setting_header.secure_os_size + 32);
+	}
+	if( hw_setting_header.atf_bl31_size ) {
+	    iSPI_uboot64_addr += (hw_setting_header.atf_bl31_size + 32);
+	}
+	if( hw_setting_header.Kpublic_fw_size ) {
+	    iSPI_uboot64_addr += (hw_setting_header.Kpublic_fw_size + 32);
+	}
+	if( hw_setting_header.Kpublic_tee_size ) {
+	    iSPI_uboot64_addr += (hw_setting_header.Kpublic_tee_size + 32);
+	}
+	iSPI_uboot64_addr += (SPI_RBUS_BASE_ADDR + 0x00020000 + 0x800); // Parameter size is 0x800
+	iSPI_uboot64_size = hw_setting_header.bootloader64_size;
+	
+	iSPI_bl31_addr += (SPI_RBUS_BASE_ADDR + 0x00020000 + 0x800); // Parameter size is 0x800
+	iSPI_bl31_size = hw_setting_header.atf_bl31_size;
+	
+	// read uboot64
+	if( iSPI_uboot64_size ) {
+		printf("%s : load U-Boot 64 from 0x%08x to 0x%08x with size 0x%08x\n", __func__, iSPI_uboot64_addr, img_addr, iSPI_uboot64_size);
+		rtkspi_read32( img_addr, iSPI_uboot64_addr, iSPI_uboot64_size);
 	}
 	
-#if 1
 	// read BL31
-	if( param.jumper_size ) {
+	if( iSPI_bl31_size ) {
 		img_addr = CONFIG_BL31_ADDR;
-		printf("%s : load BL31 from 0x%08x to 0x%08x with size 0x%08x\n", __func__, param.jumper_saddr, img_addr, param.jumper_size);
-		rtkspi_read32( img_addr, param.jumper_saddr, param.jumper_size);
+		printf("%s : load BL31 from 0x%08x to 0x%08x with size 0x%08x\n", __func__, iSPI_bl31_addr, img_addr, iSPI_bl31_size);
+		rtkspi_read32( img_addr, iSPI_bl31_addr, iSPI_bl31_size);
 	}
-#endif	
 	
 	return 0;
 }
@@ -1135,6 +1476,18 @@ int rtk_preload_bootimages_sata(void)
 #endif // CONFIG_RTK_SATA
 
 #endif // CONFIG_PRELOAD_BOOT_IMAGES
+
+void GetKeyFromSRAM(unsigned int sram_addr, unsigned char* key, unsigned int length)
+{
+        #define REG8( addr )		(*(volatile unsigned char*) (addr))
+
+        int i = 0;
+ 
+        for(i = 0; i < length; i++) {
+            *(key + i) = REG8(sram_addr + i);
+        }
+}
+
 /*
  * Use firmware description table to read images from eMMC flash.
  */
@@ -1164,6 +1517,8 @@ int rtk_plat_read_fw_image_from_eMMC(
 #endif
 	unsigned int secure_mode;
 	unsigned char ks[16],kh[16],kimg[16];
+    unsigned char aes_key[16];
+    unsigned char rsa_key[256];
 #ifdef CONFIG_CMD_KEY_BURNING
 	unsigned int * Kh_key_ptr = NULL; 
 #else
@@ -1184,9 +1539,10 @@ int rtk_plat_read_fw_image_from_eMMC(
 	mcp_dscpt_addr = 0;
 
 	secure_mode = rtk_get_secure_boot_type();
-	img_truncated_size = RSA_SIGNATURE_LENGTH;
+	img_truncated_size = RSA_SIGNATURE_LENGTH*2+NP_INV32_LENGTH;
 	
 	unsigned char str[16];// old array size is 5, change to 16. To avoid the risk in memory overlap.
+
 
 	/* find fw_entry structure according to version */
 	switch (version)
@@ -1244,11 +1600,11 @@ int rtk_plat_read_fw_image_from_eMMC(
 			{
 				switch(this_entry->type)
 				{
-					case FW_TYPE_KERNEL:
+					case FW_TYPE_RESCUE_KERNEL:
 						memset(str, 0, sizeof(str));
 						sprintf(str, "%x", this_entry->target_addr); /* write entry-point into string */
 						setenv("kernel_loadaddr", str);
-						printf("Kernel:\n");
+						printf("Rescue Kernel:\n");
 						break;
 
 					case FW_TYPE_RESCUE_DT:
@@ -1264,6 +1620,12 @@ int rtk_plat_read_fw_image_from_eMMC(
 						printf("Rescue ROOTFS:\n");
 #ifdef NAS_ENABLE
 						initrd_size = this_entry->length;
+						if(secure_mode != NONE_SECURE_BOOT)
+						{
+							initrd_size -= img_truncated_size;
+							/* Pad 1 ~ 64 bytes by do_sha256 */
+							initrd_size -= 64;
+						}
 #endif
 						break;
 
@@ -1275,13 +1637,13 @@ int rtk_plat_read_fw_image_from_eMMC(
 #else
 						continue;
 #endif
-					case FW_TYPE_AUDIO:
+					case FW_TYPE_RESCUE_AUDIO:
 						if(boot_mode == BOOT_KERNEL_ONLY_MODE)
 							continue;
 						else
 						{
 							ipc_shm.audio_fw_entry_pt = CPU_TO_BE32(this_entry->target_addr | MIPS_KSEG0BASE);
-							printf("Audio FW:\n");
+							printf("Rescue Audio FW:\n");
 						}	
 						break;
 
@@ -1534,12 +1896,43 @@ int rtk_plat_read_fw_image_from_eMMC(
 				{
 					if (secure_mode == RTK_SECURE_BOOT)
 					{       
+						unsigned int real_body_size = 0;
 						//rtk_hexdump("the first 32-byte encrypted data", (unsigned char *)mem_layout.encrpyted_addr, 32);
 						//rtk_hexdump("the last 512-byte encrypted data", (unsigned char *)(ENCRYPTED_LINUX_KERNEL_ADDR+this_entry->length-512), 512);
 
                         memset(ks,0x00,16);
                         memset(kh,0x00,16);
                         memset(kimg,0x00,16);
+                       
+                        memset(aes_key, 0x00, 16);
+                        memset(rsa_key, 0x00, 256);
+
+                        switch(this_entry->type) 
+                        {
+                            case FW_TYPE_KERNEL:                           
+                            case FW_TYPE_RESCUE_ROOTFS:                   
+                            case FW_TYPE_KERNEL_ROOTFS:                          
+                            case FW_TYPE_AUDIO:
+                                GetKeyFromSRAM(KH_P_SRAM_ADDR, aes_key, AES_KEY_SIZE);
+                                GetKeyFromSRAM(RSA_KEY_FW_SRAM_ADDR, rsa_key, RSA_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, AES_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, RSA_KEY_SIZE);
+                                sync();
+                                //rtk_hexdump("kh_p : ", aes_key, AES_KEY_SIZE);
+                                //rtk_hexdump("rsa_key_fw : ", rsa_key, RSA_KEY_SIZE);
+                                break;
+                            case FW_TYPE_TEE:
+                                GetKeyFromSRAM(KX_P_SRAM_ADDR, aes_key, AES_KEY_SIZE);
+                                GetKeyFromSRAM(RSA_KEY_TEE_SRAM_ADDR, rsa_key, RSA_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, AES_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, RSA_KEY_SIZE);
+                                sync();
+                                //rtk_hexdump("kx_p : ", aes_key, 16);
+                                //rtk_hexdump("rsa_key_tee : ", rsa_key, RSA_KEY_SIZE);
+                                break;
+                            default:
+                                break;
+                        }
 
 #ifdef CONFIG_CMD_KEY_BURNING
                         OTP_Get_Byte(OTP_K_S, ks, 16);
@@ -1553,20 +1946,19 @@ int rtk_plat_read_fw_image_from_eMMC(
                         sync();
 
                         Kh_key_ptr = kimg;
-                        //rtk_hexdump("kimg key : ", (unsigned char *)kimg, 16);
-                        Kh_key_ptr[0] = swap_endian(Kh_key_ptr[0]);
-                        Kh_key_ptr[1] = swap_endian(Kh_key_ptr[1]);
-                        Kh_key_ptr[2] = swap_endian(Kh_key_ptr[2]);
-                        Kh_key_ptr[3] = swap_endian(Kh_key_ptr[3]);
-                        //rtk_hexdump("Kh_key_ptr : ", (unsigned char *)Kh_key_ptr, 16);
-						flush_cache((unsigned int) kimg, 16);
+                        Kh_key_ptr = aes_key;
+                        //Kh_key_ptr[0] = swap_endian(Kh_key_ptr[0]);
+                        //Kh_key_ptr[1] = swap_endian(Kh_key_ptr[1]);
+                        //Kh_key_ptr[2] = swap_endian(Kh_key_ptr[2]);
+                        //Kh_key_ptr[3] = swap_endian(Kh_key_ptr[3]);
+						flush_cache((unsigned int) aes_key, 16);
                                                 
 						// decrypt image
 						printf("to decrypt...\n");						
 						flush_cache((unsigned int) mem_layout.encrpyted_addr, this_entry->length);
 						if (decrypt_image((char *)mem_layout.encrpyted_addr,
 							(char *)mem_layout.decrypted_addr,
-							this_entry->length,
+							this_entry->length  - img_truncated_size,
 							Kh_key_ptr))
 						{
 							printf("decrypt image(%d) error!\n", this_entry->type);
@@ -1582,17 +1974,24 @@ int rtk_plat_read_fw_image_from_eMMC(
 
 						//reverse_signature( (unsigned char *)(mem_layout.decrypted_addr + imageSize - img_truncated_size) );
 
+                        copy_memory(mem_layout.decrypted_addr + this_entry->length - img_truncated_size, mem_layout.encrpyted_addr + this_entry->length - img_truncated_size, img_truncated_size);
+                    	flush_cache((unsigned int) mem_layout.decrypted_addr, this_entry->length);
+
+                        real_body_size = (UINT32)(REG32(mem_layout.decrypted_addr + (this_entry->length - img_truncated_size) - 4));
+                        real_body_size = swap_endian(real_body_size);
+                    	real_body_size /= 8;
+
 						flush_cache((unsigned int) mem_layout.decrypted_addr, this_entry->length);
 						ret = Verify_SHA256_hash( (unsigned char *)mem_layout.decrypted_addr,
-												  this_entry->length - img_truncated_size,
+												  real_body_size,
 												  (unsigned char *)(mem_layout.decrypted_addr + this_entry->length - img_truncated_size),
-												  1 );						  
+												  1, rsa_key);						  
 						if( ret < 0 ) {
 							printf("[ERR] %s: verify hash fail(%d)\n", __FUNCTION__, ret );
 							return RTK_PLAT_ERR_READ_FW_IMG;
 						}
 
-						imageSize = imageSize - img_truncated_size - SHA256_SIZE;
+						//imageSize = imageSize - img_truncated_size - SHA256_SIZE;
 					}
 				}
 
@@ -1705,6 +2104,8 @@ int rtk_plat_read_fw_image_from_SATA(
 #endif // mark secure boot
 	unsigned int secure_mode;
 	unsigned char ks[16],kh[16],kimg[16];
+    unsigned char aes_key[16];
+    unsigned char rsa_key[256];
 #ifdef CONFIG_CMD_KEY_BURNING
 	unsigned int * Kh_key_ptr = NULL; 
 #else
@@ -1724,10 +2125,11 @@ int rtk_plat_read_fw_image_from_SATA(
 	mcp_dscpt_addr = 0;
 
 	secure_mode = rtk_get_secure_boot_type();
-	img_truncated_size = RSA_SIGNATURE_LENGTH;
+	img_truncated_size = RSA_SIGNATURE_LENGTH*2+NP_INV32_LENGTH;
 	
 	unsigned char str[16];// old array size is 5, change to 16. To avoid the risk in memory overlap.
 
+	
 	/* find fw_entry structure according to version */
 	switch (version)
 	{
@@ -1787,11 +2189,11 @@ int rtk_plat_read_fw_image_from_SATA(
 				//printf("****** %s %d\n", __FUNCTION__, __LINE__);
 				switch(this_entry->type)
 				{
-					case FW_TYPE_KERNEL:
+					case FW_TYPE_RESCUE_KERNEL:
 						memset(str, 0, sizeof(str));
 						sprintf(str, "%x", this_entry->target_addr); /* write entry-point into string */
 						setenv("kernel_loadaddr", str);
-						printf("Kernel:\n");
+						printf("Rescue Kernel:\n");
 						break;
 
 					case FW_TYPE_RESCUE_DT:
@@ -1814,13 +2216,13 @@ int rtk_plat_read_fw_image_from_SATA(
 #else
 						continue;
 #endif
-					case FW_TYPE_AUDIO:
+					case FW_TYPE_RESCUE_AUDIO:
 						if(boot_mode == BOOT_KERNEL_ONLY_MODE)
 							continue;
 						else
 						{
 							ipc_shm.audio_fw_entry_pt = CPU_TO_BE32(this_entry->target_addr | MIPS_KSEG0BASE);
-							printf("Audio FW:\n");
+							printf("Rescue Audio FW:\n");
 						}	
 						break;
 
@@ -2001,12 +2403,43 @@ int rtk_plat_read_fw_image_from_SATA(
 				{
 					if (secure_mode == RTK_SECURE_BOOT)
 					{       
+						unsigned int real_body_size = 0;
 						//rtk_hexdump("the first 32-byte encrypted data", (unsigned char *)mem_layout.encrpyted_addr, 32);
 						//rtk_hexdump("the last 512-byte encrypted data", (unsigned char *)(ENCRYPTED_LINUX_KERNEL_ADDR+this_entry->length-512), 512);
 
                         memset(ks,0x00,16);
                         memset(kh,0x00,16);
                         memset(kimg,0x00,16);
+                       
+                        memset(aes_key, 0x00, 16);
+                        memset(rsa_key, 0x00, 256);
+
+                        switch(this_entry->type) 
+                        {
+                            case FW_TYPE_KERNEL:                           
+                            case FW_TYPE_RESCUE_ROOTFS:                   
+                            case FW_TYPE_KERNEL_ROOTFS:                          
+                            case FW_TYPE_AUDIO:
+                                GetKeyFromSRAM(KH_P_SRAM_ADDR, aes_key, AES_KEY_SIZE);
+                                GetKeyFromSRAM(RSA_KEY_FW_SRAM_ADDR, rsa_key, RSA_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, AES_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, RSA_KEY_SIZE);
+                                sync();
+                                //rtk_hexdump("kh_p : ", aes_key, AES_KEY_SIZE);
+                                //rtk_hexdump("rsa_key_fw : ", rsa_key, RSA_KEY_SIZE);
+                                break;
+                            case FW_TYPE_TEE:
+                                GetKeyFromSRAM(KX_P_SRAM_ADDR, aes_key, AES_KEY_SIZE);
+                                GetKeyFromSRAM(RSA_KEY_TEE_SRAM_ADDR, rsa_key, RSA_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, AES_KEY_SIZE);
+                                flush_cache((unsigned int) aes_key, RSA_KEY_SIZE);
+                                sync();
+                                //rtk_hexdump("kx_p : ", aes_key, 16);
+                                //rtk_hexdump("rsa_key_tee : ", rsa_key, RSA_KEY_SIZE);
+                                break;
+                            default:
+                                break;
+                        }
 
 #ifdef CONFIG_CMD_KEY_BURNING
                         OTP_Get_Byte(OTP_K_S, ks, 16);
@@ -2020,20 +2453,21 @@ int rtk_plat_read_fw_image_from_SATA(
                         sync();
 
                         Kh_key_ptr = kimg;
-                        //rtk_hexdump("kimg key : ", (unsigned char *)kimg, 16);
-                        Kh_key_ptr[0] = swap_endian(Kh_key_ptr[0]);
-                        Kh_key_ptr[1] = swap_endian(Kh_key_ptr[1]);
-                        Kh_key_ptr[2] = swap_endian(Kh_key_ptr[2]);
-                        Kh_key_ptr[3] = swap_endian(Kh_key_ptr[3]);
-                        //rtk_hexdump("Kh_key_ptr : ", (unsigned char *)Kh_key_ptr, 16);
-						flush_cache((unsigned int) kimg, 16);
+                        Kh_key_ptr = aes_key;
+                        //Kh_key_ptr[0] = swap_endian(Kh_key_ptr[0]);
+                        //Kh_key_ptr[1] = swap_endian(Kh_key_ptr[1]);
+                        //Kh_key_ptr[2] = swap_endian(Kh_key_ptr[2]);
+                        //Kh_key_ptr[3] = swap_endian(Kh_key_ptr[3]);
+						flush_cache((unsigned int) aes_key, 16);
                                                 
 						// decrypt image
-						printf("to decrypt...\n");						
+						printf("to decrypt...\n");
+                        
 						flush_cache((unsigned int) mem_layout.encrpyted_addr, this_entry->length);
+                        
 						if (decrypt_image((char *)mem_layout.encrpyted_addr,
 							(char *)mem_layout.decrypted_addr,
-							this_entry->length,
+							this_entry->length  - img_truncated_size,
 							Kh_key_ptr))
 						{
 							printf("decrypt image(%d) error!\n", this_entry->type);
@@ -2049,17 +2483,24 @@ int rtk_plat_read_fw_image_from_SATA(
 
 						//reverse_signature( (unsigned char *)(mem_layout.decrypted_addr + imageSize - img_truncated_size) );
 
+                        copy_memory(mem_layout.decrypted_addr + this_entry->length - img_truncated_size, mem_layout.encrpyted_addr + this_entry->length - img_truncated_size, img_truncated_size);
+                    	flush_cache((unsigned int) mem_layout.decrypted_addr, this_entry->length);
+
+                        real_body_size = (UINT32)(REG32(mem_layout.decrypted_addr + (this_entry->length - img_truncated_size) - 4));
+                        real_body_size = swap_endian(real_body_size);
+                    	real_body_size /= 8;
+
 						flush_cache((unsigned int) mem_layout.decrypted_addr, this_entry->length);
 						ret = Verify_SHA256_hash( (unsigned char *)mem_layout.decrypted_addr,
-												  this_entry->length - img_truncated_size,
+												  real_body_size,
 												  (unsigned char *)(mem_layout.decrypted_addr + this_entry->length - img_truncated_size),
-												  1 );						  
+												  1, rsa_key);						  
 						if( ret < 0 ) {
 							printf("[ERR] %s: verify hash fail(%d)\n", __FUNCTION__, ret );
 							return RTK_PLAT_ERR_READ_FW_IMG;
 						}
 
-						imageSize = imageSize - img_truncated_size - SHA256_SIZE;
+						//imageSize = imageSize - img_truncated_size - SHA256_SIZE;
 					}
 				}
 
@@ -2209,6 +2650,12 @@ int rtk_plat_read_fw_image_from_NAND(
 						printf("Rescue ROOTFS:\n");
 #ifdef NAS_ENABLE
 						initrd_size = this_entry->length;
+						if(secure_mode != NONE_SECURE_BOOT)
+						{
+							initrd_size -= img_truncated_size;
+							/* Pad 1 ~ 64 bytes by do_sha256 */
+							initrd_size -= 64;
+						}
 #endif
 						break;
 
@@ -2423,7 +2870,7 @@ int rtk_plat_read_fw_image_from_NAND(
 						ret = Verify_SHA256_hash( (unsigned char *)mem_layout.flash_to_ram_addr,
 												  this_entry->length - img_truncated_size,												  
 												  (unsigned char *)(mem_layout.flash_to_ram_addr + this_entry->length - img_truncated_size),
-												  1 );
+												  1, NULL );
 						if( ret < 0 ) {
 							printf("[ERR] %s: verify hash fail(%d)\n", __FUNCTION__, ret );
 							return RTK_PLAT_ERR_READ_FW_IMG;
@@ -2598,6 +3045,11 @@ int rtk_plat_prepare_fw_image_from_eMMC(void)
 	uint fw_desc_table_blk;	// block no of firmware description table
 	uint checksum;
 	int i;
+	extern unsigned char g_wdpp_flag;
+	extern char version_string[];
+	char cmdline[512];
+    char wd_sn[64];
+    char *psn;
 
     if(boot_mode==BOOT_GOLD_MODE)
     {
@@ -2607,9 +3059,9 @@ int rtk_plat_prepare_fw_image_from_eMMC(void)
     else
     {
         printf("---------------LOAD  NORMAL FW  TABLE ---------------\n");
-        eMMC_fw_desc_table_start = eMMC_bootcode_area_size + CONFIG_FACTORY_SIZE;
+        eMMC_fw_desc_table_start = eMMC_bootcode_area_size + CONFIG_FACTORY_SIZE;	/* 0x00240000*/
     }
-	fw_desc_table_base = FIRMWARE_DESCRIPTION_TABLE_ADDR;
+	fw_desc_table_base = FIRMWARE_DESCRIPTION_TABLE_ADDR;	/* 0x06400000*/
 
 	/* Firmware Description Table is right behind bootcode blocks */
 	fw_desc_table_blk = eMMC_fw_desc_table_start / EMMC_BLOCK_SIZE;
@@ -2801,6 +3253,35 @@ int rtk_plat_prepare_fw_image_from_eMMC(void)
 			fw_desc_table_base, part_entry, part_count,
 			fw_entry, fw_entry_num,
 			fw_desc_table_v1.version);
+
+    if ( (psn = getenv("serial")) == NULL )
+      strcpy(wd_sn,DEFAULT_SN);
+    else
+      strcpy(wd_sn,psn);
+
+	if(boot_mode == BOOT_NORMAL_MODE){
+	
+		snprintf(cmdline, sizeof(cmdline), "earlycon=uart8250,mmio32,0x98007800 console=ttyS0,115200 init=/init androidboot.hardware=pelican androidboot.storage=%s androidboot.selinux=permissive androidboot.heapsize=192m androidboot.heapgrowthlimit=128m ver=%s sn=%s", "emmc",version_string,wd_sn);
+
+		setenv("bootargs", cmdline);
+
+	}else if(boot_mode == BOOT_RESCUE_MODE){
+	
+		snprintf(cmdline, sizeof(cmdline), "earlycon=uart8250,mmio32,0x98007800 console=ttyS0,115200 init=/init androidboot.hardware=pelican androidboot.storage=%s androidboot.selinux=permissive androidboot.heapsize=192m androidboot.heapgrowthlimit=128m ver=%s sn=%s","emmc_b",version_string,wd_sn);
+
+		setenv("bootargs", cmdline);
+	}else if(boot_mode == BOOT_GOLD_MODE){
+
+		printf("Booting golden image, use default bootarg\n");
+	
+	}else{
+	
+		printf("[ERROR]: Unknouwn boot_mode\n");
+	
+	}
+		
+
+
 	
 #endif
 
@@ -2827,7 +3308,12 @@ int rtk_plat_prepare_fw_image_from_SATA(void)
 	uint fw_desc_table_blk;	// block no of firmware description table
 	uint checksum;
 	int i;
-	
+	extern unsigned char g_wdpp_flag;
+	extern char version_string[];
+	char cmdline[512];
+	char wd_sn[64];
+	char *psn;
+    
 	if (sata_curr_device == -1) {
 		if (sata_initialize()) {
 			printf("---------------SATA init fail, try again ---------------\n");
@@ -3009,6 +3495,45 @@ int rtk_plat_prepare_fw_image_from_SATA(void)
 		fw_entry, fw_entry_num,
 		fw_desc_table_v1.version);
 	
+
+
+#ifdef CONFIG_WD_AB
+	if ( (psn = getenv("serial")) == NULL )
+		strcpy(wd_sn,DEFAULT_SN);
+	else
+		strcpy(wd_sn,psn);
+
+	// Rivers: overwrite bootarg for loading A/B partition
+	// set bootarg using setenv
+	if(boot_mode == BOOT_NORMAL_MODE){
+		printf("Setting bootargs to A\n");
+
+                snprintf(cmdline, sizeof(cmdline), "earlycon=uart8250,mmio32,0x98007800 console=ttyS0,115200 init=/init androidboot.hardware=monarch androidboot.heapgrowthlimit=128m androidboot.heapsize=192m androidboot.storage=%s androidboot.selinux=permissive ver=%s sn=%s","sata",version_string,wd_sn);
+		setenv("bootargs", cmdline);
+		
+	}
+	else if (boot_mode == BOOT_RESCUE_MODE)
+	{
+		printf("Setting bootargs to B\n");
+
+                snprintf(cmdline, sizeof(cmdline), "earlycon=uart8250,mmio32,0x98007800 console=ttyS0,115200 init=/init androidboot.hardware=monarch androidboot.heapgrowthlimit=128m androidboot.heapsize=192m androidboot.storage=%s androidboot.selinux=permissive ver=%s sn=%s","sata_b",version_string,wd_sn);
+		setenv("bootargs", cmdline);	
+	
+	}else if(boot_mode == BOOT_GOLD_MODE){
+
+		printf("Booting golden image, use default bootarg\n");
+	
+	}else{
+	
+		printf("[ERROR]: Unknouwn boot_mode\n");
+	
+	}
+
+	
+#endif
+	
+
+
 #endif // CONFIG_SYS_RTK_SATA_STORAGE
 
 	return ret;
@@ -3634,9 +4159,389 @@ int  rtk_plat_boot_handler(void)
 	return ret;
 }
 
+#ifdef CONFIG_MODULE_TEST
+void rtk_plat_do_bootr_after_mt()
+{
+	int ret = RTK_PLAT_ERR_OK;
+
+	/* reset boot flags */
+	boot_from_flash = BOOT_FROM_FLASH_NORMAL_MODE;
+	boot_from_usb = BOOT_FROM_USB_DISABLE;
+
+	WATCHDOG_KICK();
+	ret = rtk_plat_boot_handler();
+#if 0    
+    if (ret != RTK_PLAT_ERR_OK) {
+        /*   LOAD GOLD FW   */
+        ret = RTK_PLAT_ERR_OK;
+        boot_mode=BOOT_GOLD_MODE;
+        ret = rtk_plat_boot_handler();
+    }
+#endif
+	return;
+}
+#endif
+
+
+#ifdef UBOOT_PINGPONG_NEW_DESIGN
+
+static inline int is_digit(const char c)
+{
+	return ( c >= '0' && c <= '9');
+}
+
+// constuct the string and write back to config
+static int wd_write_boot_config(const struct boot_config *pbcf)
+{
+
+	char tmpbuf[128];
+	volatile unsigned int addr = 0x4000000;
+	char writeBuf[10];
+	char str_bstate[2] = {0 ,'\0'};
+	char str_nbr[2] = {0 ,'\0'};
+	char str_bna[2] = {0 ,'\0'};
+
+
+	memset(writeBuf, 0, sizeof(writeBuf));
+	sprintf(writeBuf, "%d:%c:%d:;",
+		pbcf->bState,
+		pbcf->nextBootRegion,
+		pbcf->numBootAttempts);
+
+	memcpy((u_char *)addr, writeBuf, sizeof(writeBuf));
+
+#if defined (CONFIG_BOARD_WD_MONARCH)    
+	sprintf(tmpbuf, "fatwrite sata 0:12 0x4000000 %s 10", BOOT_CONFIG_FILE_NAME);
+
+#elif defined(CONFIG_BOARD_WD_PELICAN)
+	sprintf(tmpbuf, "fatwrite mmc 0:1 0x4000000 %s 10", BOOT_CONFIG_FILE_NAME);
+#endif	
+	if (run_command(tmpbuf, 0) != 0) {
+		printf("%s: File %s does not exist, run \"wdpp set\" command manually\n",
+               __func__, BOOT_CONFIG_FILE_NAME);	
+		return -1;
+	}	
+
+	printf("\n[INFO]: write boot config %s\n", writeBuf);
+	// pass to kernel /proc/device-tree/factory but not saving in flash
+	str_bstate[0] = pbcf->bState + 48;
+	str_bna[0] = pbcf->numBootAttempts + 48;
+	str_nbr[0] = gBootConfig.nextBootRegion;
+	setenv("bootstate", str_bstate);
+	setenv("bna", str_bna);
+	setenv("nbr", str_nbr);
+
+	return 0;
+
+    
+}
+
+//
+// Function to read the boot config parameter from config partition
+// Return NULL if failed
+//
+static int wd_read_boot_config(void)
+{
+	char cmdBuf[128];
+	volatile unsigned int addr = 0x4000000;
+
+	char str_bstate[2] = {0 ,'\0'};
+	char str_nbr[2] = {0 ,'\0'};
+	char str_bna[2] = {0 ,'\0'};
+
+	char readBuf[10];
+	memset(cmdBuf, 0, sizeof(cmdBuf));
+	memset(readBuf, 0, sizeof(readBuf));
+    
+#if defined(CONFIG_BOARD_WD_MONARCH)
+	sprintf(cmdBuf, "fatload sata 0:12 0x4000000 %s 10", BOOT_CONFIG_FILE_NAME);    
+#elif defined (CONFIG_BOARD_WD_PELICAN)
+	sprintf(cmdBuf, "fatload mmc 0:1 0x4000000 %s 10", BOOT_CONFIG_FILE_NAME);
+#endif
+
+	if (run_command(cmdBuf, 0) != 0) {
+		printf("%s: Error, File %s does not exist, exit\n",
+		__func__, BOOT_CONFIG_FILE_NAME);
+		return -1; 
+	}
+
+	// get the string
+	memcpy(readBuf, (u_char *)addr, sizeof(readBuf)); 
+
+	// now parsing the string
+	char *p = readBuf;
+	char *p1 = readBuf;
+
+	BOOT_CFG_STR_T s = BOOT_CFG_STR_STATE;
+	// memset((u_char *)gBootConfig, 0, sizeof(gBootConfig));
+    
+	while(p && *p != ';' && *p != '\0') {
+		if (*p ==':') {
+			switch(s) {
+			case BOOT_CFG_STR_STATE:
+				if (is_digit(*p1)) {
+					gBootConfig.bState = (BOOT_STATE_T)(*p1 - '0');
+				}else {
+					printf("%s: Error, invalid boot state. \n", __func__);
+					return -1;
+				}
+				s = BOOT_CFG_STR_NBR;
+				break;
+			case BOOT_CFG_STR_NBR:
+				if (*p1 != 'A' || *p1 != 'B') {
+					gBootConfig.nextBootRegion = *p1;
+				s = BOOT_CFG_STR_BNA;
+				}else {
+					printf("%s: Error, invalid NBR = %c\n",__func__, *p1);
+					return -1;
+				}
+				break;
+			case BOOT_CFG_STR_BNA:
+				if (is_digit(*p1)) {
+					gBootConfig.numBootAttempts = (int)(*p1 - '0');
+				}else {
+					printf("%s: Error, invalid bna.\n", __func__);
+					return -1;
+				}
+				s = BOOT_CFG_STR_DONE;
+				break;
+			}
+		}
+		if(p == p1) {
+			p++;
+		}else {
+			p++;
+			p1++;
+		}
+	}
+
+	if (s != BOOT_CFG_STR_DONE) {
+		return -1;
+	}else {
+		debug("bstate = %d, bna = %d, nbr = %c\n",
+			gBootConfig.bState, gBootConfig.numBootAttempts,
+			gBootConfig.nextBootRegion);
+		
+		// pass to kernel /proc/device-tree/factory but not saving in flash
+		str_bstate[0] = gBootConfig.bState + 48;
+		str_bna[0] = gBootConfig.numBootAttempts + 48;
+		str_nbr[0] = gBootConfig.nextBootRegion;
+		setenv("bootstate", str_bstate);
+		setenv("bna", str_bna);
+		setenv("nbr", str_nbr);
+	}
+
+	return 0;
+}
+
+//
+// Switch boot region via changing the boot_mode
+static int wd_boot_cbr(void)
+{
+	char *cbr = NULL;
+	cbr = getenv("cbr");
+	if(cbr != NULL)	{
+		if( strncmp(cbr, "A", 1 ) == 0 ){
+		// set the boot_mode
+			boot_mode = BOOT_NORMAL_MODE;		// A image
+		} else if( strncmp(cbr, "B", 1 ) == 0 )	{
+			boot_mode = BOOT_RESCUE_MODE;		// B image
+		}else {
+			printf("[FATAL ERROR] Invalid CBR(%s) from uboot env, boot USB rescue mode.", cbr);
+			gUSB_MODE = 1;
+			return -1;
+		}
+	}else {	//unknown cbr
+		printf("[FATAL ERROR] CBR not found, boot USB rescue mode.\n");
+		gUSB_MODE = 1;
+		return -1;
+	}
+
+	return 0;
+}
+
+//
+// Boot from NBR
+//
+static int wd_boot_nbr(void)
+{
+	if(gBootConfig.nextBootRegion == 'A'){
+		boot_mode = BOOT_NORMAL_MODE;		// A image
+	}else if(gBootConfig.nextBootRegion == 'B'){
+		boot_mode = BOOT_RESCUE_MODE;		// B image
+	}else{	//unknown nbr
+		printf("[FATAL ERROR] Invalid nbr(%c) from CONFIG, boot CBR\n", gBootConfig.nextBootRegion);
+		return wd_boot_cbr();
+	}
+
+	return 0;
+}
+
+//
+static int update_cbr_from_nbr(void)
+{
+    char nbr[2] = { 0 ,'\0'};
+    
+    // update the cbr with valid nbr only
+    if (gBootConfig.nextBootRegion == 'A' ||
+        gBootConfig.nextBootRegion == 'B') {
+        nbr[0] = gBootConfig.nextBootRegion;
+        setenv("cbr", nbr);
+		if (run_command("env save", 0) != 0) {
+		    printf("Failed to write cbr to uboot env, exit\n");
+		    return -1;
+		}
+    }else return -1;
+
+    return 0;
+}
+
+#endif //UBOOT_PINGPONG_NEW_DESIGN
+
+
 int rtk_plat_do_bootr(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 {
 	int ret = RTK_PLAT_ERR_OK;
+
+    int err = 0;
+    
+    // flag that indicate if we need to update the boot config
+    int updateBootConfig = 0;
+
+	// make sure the HDD is ready
+	if (!is_sata_initialized()) {
+		// sata is not initialized, fail
+		// FIXME! how to handle this case?
+		// switch to USB boot?
+		return -1;
+	}
+
+    // reading the gpt partition to make sure the
+    // partition table is current, otherwise, regenerates
+    // the partition table then reboot
+#if defined (CONFIG_BOARD_WD_MONARCH)
+    char *gpt_ver = getenv("gpt_ver");
+    int ngpt_ver = gpt_ver ? simple_strtoul (gpt_ver, NULL, 10) : 0;
+    printf("[Info] getting gpt_ver env and gpt version = %d\n", ngpt_ver);
+    char gpt_ver_str[8];
+    if (ngpt_ver < CURRENT_GPT_VER) {
+        printf("[Info] Current gpt (%d) is not out of date. need to update to %d\n",
+               ngpt_ver, CURRENT_GPT_VER);
+        // generating GPU 
+        run_command("rtkgpt gen V3", 0);
+        sprintf(gpt_ver_str, "%d", CURRENT_GPT_VER);
+        setenv("gpt_ver", gpt_ver_str);
+        run_command("env save", 0);
+    }
+#endif //CONFIG_BOARD_WD_MONARCH
+    
+#ifdef UBOOT_PINGPONG_NEW_DESIGN
+	    
+	int bna = -1;
+	    
+	BOOT_STATE_T bootState = BOOT_STATE_UNKNOWN;
+
+    // always read the bootconfig from config partition 
+    //
+	if (wd_read_boot_config() == 0) {
+        bootState = gBootConfig.bState;
+    }// else: if reading the config failed, the bootState is not changed, then boot CBR
+
+	switch (bootState){
+    case BOOT_STATE_NO_OTA:  // no OTA boot state is clean
+		printf("\n[INFO]: bootState: BOOT_STATE_NO_OTA\n");
+        // nothing should have changed. No need to update
+        // config partition
+		wd_boot_cbr();
+		break;
+    case BOOT_STATE_INIT:
+		// initial state (USB Installer will set to this state)
+		printf("\n[INFO]: bootState: BOOT_STATE_INIT\n");
+		printf("[INFO]: Re-initialize uboot env entries\n");
+		setenv("cbr", "A");
+		if (run_command("env save", 0) != 0) {
+		    printf("Failed to initialize uboot env entries, exit\n");
+		    return -1;
+		}
+
+		boot_mode = BOOT_NORMAL_MODE;
+
+		// set bootState to BOOT_STATE_NO_OTA in CONFIG
+		// why need to write the boot state back to config???
+		//
+        gBootConfig.bState = BOOT_STATE_NO_OTA;
+        // write a invalid nbr here, to make sure next OTA has the right value
+        // written to it
+        gBootConfig.nextBootRegion = 'F';
+        updateBootConfig = 1;
+		break;
+    case BOOT_STATE_OTA_TRIGGERED:
+		bna = gBootConfig.numBootAttempts;
+		printf("\n[INFO]: bootState: BOOT_STATE_OTA_TRIGGERED, bna = %d\n", bna);
+		if((bna > 0) && (bna <= 5)) {		//boot NBR for evaluation
+		    printf("[INFO]: boot nbr for evaluation\n");
+		    wd_boot_nbr();
+		}else{
+            // this is the case wheren bna == 0 or bna > 5
+            // in either case, we fall back to CBR, but need to reset the boot state as well,
+            // so to allow OTA happen.
+		    printf("[ERROR]: Failed to get Boot Next Attempt(%d), boot CBR\n", bna);
+            gBootConfig.bState = BOOT_STATE_NO_OTA;
+            // write a invalid nbr here, to make sure next OTA has the right value
+            // written to it
+            gBootConfig.nextBootRegion = 'F';
+            updateBootConfig = 1;
+		    wd_boot_cbr();
+		}
+		break;
+    case BOOT_STATE_OTA_PASSED:
+		printf("\n[INFO]: OTA passed, boot NBR and update CBR\n");
+        // Ok, the last nbr boot is sucessful, update the cbr
+        if (update_cbr_from_nbr() == -1) {
+            printf("[ERR]: %s return failure.\n", __func__);
+        }
+        //
+        // Set bootState to BOOT_STATE_NO_OTA for next boot
+        //
+        gBootConfig.bState = BOOT_STATE_NO_OTA;
+        // write a invalid nbr here, to make sure next OTA has the right value
+        // written to it
+        gBootConfig.nextBootRegion = 'F';
+        updateBootConfig = 1;
+		wd_boot_cbr();
+		break;
+    case BOOT_STATE_OTA_FAILED:	//boot CBR regardless of CONFIG
+		printf("\n[INFO]: OTA failed, boot CBR\n");
+        gBootConfig.bState = BOOT_STATE_NO_OTA;
+        // write a invalid nbr here, to make sure next OTA has the right value
+        // written to it
+        gBootConfig.nextBootRegion = 'F';
+        updateBootConfig = 1;        
+		wd_boot_cbr();
+		break;
+   case BOOT_STATE_RECOVERY:
+       printf("\n[INFO]: Boot golden image\n");
+       boot_mode = BOOT_GOLD_MODE;
+       // The boot parameter is changed to following after factory reset in the recovery image:
+       // 1. BOOT_STATE_RECOVERY -> BOOT_STATE_NO_OTA
+       // 2. nbr set to 'F'
+       // 3. bna set to 0
+       // once the factory reset task is finished, reboot the device, since the cbr is not changed,
+       // and boot state is BOOT_STATE_RECOVERY, the device should boot with cbr directly
+	break;
+
+    default:
+		printf("\n[ERROR]: Unknown bootState(%d), boot CBR\n", bootState);
+		wd_boot_cbr();
+        gBootConfig.bState = BOOT_STATE_NO_OTA;
+        gBootConfig.nextBootRegion = 'F';
+        updateBootConfig = 1;        
+		break;
+    }
+    
+    if (updateBootConfig)
+        wd_write_boot_config(&gBootConfig);
+#endif	// endif CONFIG_BOARD_WD_MONARCH
 
 	/* reset boot flags */
 	boot_from_flash = BOOT_FROM_FLASH_NORMAL_MODE;
@@ -3672,21 +4577,36 @@ int rtk_plat_do_bootr(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 	}
 
 	WATCHDOG_KICK();
-	ret = rtk_plat_boot_handler();
-    
-    if (ret != RTK_PLAT_ERR_OK) {
-        /*   LOAD GOLD FW   */
-        ret = RTK_PLAT_ERR_OK;
-        boot_mode=BOOT_GOLD_MODE;
-        ret = rtk_plat_boot_handler();
-    }
+
+	if(!gUSB_MODE){
+	// load fw image from SATA or EMMC 
+		ret = rtk_plat_boot_handler();
+	}
+
+#if 0	/** WD change: 
+	River: KAM-8762: Skip boot golden image
+	**/	
+	if (ret != RTK_PLAT_ERR_OK) {
+		/*   LOAD GOLD FW   */
+		boot_mode = BOOT_GOLD_MODE;
+		ret = rtk_plat_boot_handler();
+	}	
+#endif
 
 #ifdef CONFIG_RESCUE_FROM_USB
-	if (ret != RTK_PLAT_ERR_OK) {
+	if( gUSB_MODE || (ret != RTK_PLAT_ERR_OK))
 		ret = boot_rescue_from_usb();
-	}
 #endif /* CONFIG_RESCUE_FROM_USB */
 
+//adam 0729 start
+#ifdef CONFIG_RESCUE_FROM_DHCP
+//add the boot dhcp function when rescue from usb fail	
+	if (ret != RTK_PLAT_ERR_OK) {
+		ret = boot_rescue_from_dhcp();
+	}
+//adam 0729 end	
+#endif
+	
 	return CMD_RET_SUCCESS;
 }
 

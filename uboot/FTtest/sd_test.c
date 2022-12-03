@@ -3,6 +3,7 @@
 #include <asm/arch/system.h>
 #include <asm/system.h>
 #include <asm/arch/rbus/misc_reg.h>
+#include <test_pattern/emmc_reg.h>
 #include <common.h>
 #include "kylin_etn_reg.h"
 
@@ -12,7 +13,7 @@ typedef unsigned int             BOOLEAN;
 #define WRITE_MEM32(addr, val)     (*(volatile unsigned int *) (addr)) = (val)
 #define READ_MEM32(addr)           (*(volatile unsigned int *) (addr))
 
-//#define __BURN_EFUSE__
+//#define __BURN_EFUSE__	1
 #define SD_DEBUG 1
 
 #if SD_DEBUG
@@ -33,9 +34,11 @@ ADC_Data    *pADC = NULL;
 void sd_init_gpio(void)
 {
 	//GPIO82
+	//EMMC_MUXPAD1 0x9801_2604, bit[19..18] = 00, Mux to gpio[82]
 	//GP2DIR 0x9801_B108, bit 18 = 1
 	//GP2DATO 0x9801_B118, bit 18 = 0
 
+	rtd_clearbits(EMMC_MUXPAD1, _BIT18 | _BIT19);
 	rtd_setbits(MIS_GP2DIR, _BIT18);
 	rtd_clearbits(MIS_GP2DATO, _BIT18);
 	SD_DBG("1295 GPIO82 low\n");
@@ -235,7 +238,9 @@ void ADC_Bias_Calibration(void){
 // 列舉出四路所有檔位的 ADC bias 值，供後續分析用
 // 由數據中取出最小值的 setting 就是答案了
 
-#define  ADC_Bias_Limit    1966     // 0.03 * 256 * 256  calibration 完的最小值不能超過這數值，否則視為 FAIL IC
+#define ADC_Bias_Limit    1966     // 0.03 * 256 * 256  calibration 完的最小值不能超過這數值，否則視為 FAIL IC
+
+#define ADC_Bias_K_Default   0x8888
 
 	unsigned int   i;
 	unsigned int   ado[256];
@@ -243,7 +248,6 @@ void ADC_Bias_Calibration(void){
 	unsigned int   Bias_Setting, Bias_Write_Pattern;
 	unsigned int   channel;
 	unsigned int   index[4];
-	unsigned int   GPHY_eFuse[2];
 
 	// force_giga_slave_TP1.m
 	ETN_MDIO_write(0xa43, 27, 0x8010);
@@ -340,41 +344,43 @@ void ADC_Bias_Calibration(void){
 	// 0x980171BC[1:0] = index[1][3:2] xor 0x2, 0x980171B8[31:30] = index[1][1:0] xor 0x0
 	// 0x980171B8[29:26] = index[0][3:0] xor 0x8
 	// efuse 原始狀態為 '0'，燒錄後成為 '1'，故只需燒錄 data 中 '1' 的位元
-	SD_DBG("Checking pro_efuse_act...");
-	while(0 != ((1 << 16) & READ_MEM32(0x98017404)));     // 需先確認 efuse 可讀取
-	SD_DBG("done\n");
-	GPHY_eFuse[0] = (READ_MEM32(0x980171bc) << 22) | (READ_MEM32(0x980171b8) >> 10);
-	GPHY_eFuse[1] = (READ_MEM32(0x980171c0) << 22) | (READ_MEM32(0x980171bc) >> 10);
-	SD_DBG("Before programming, GPHY_eFuse dump = %08x%08x\n", GPHY_eFuse[1], GPHY_eFuse[0]);
-	SD_DBG("Checking efuse_rdy...");
-	while(0 == ((0x1 << 0) & ETN_MDIO_read(0xa46, 20)));  // 確認 fuse_rdy = 1
-	SD_DBG("done\n");
-	SD_DBG("Fuse_Dout = %04x%04x%04x%04x\n", ETN_MDIO_read(0xa46, 19), ETN_MDIO_read(0xa46, 18), ETN_MDIO_read(0xa46, 17), ETN_MDIO_read(0xa46, 16));
-	GPHY_eFuse[0] = (GPHY_eFuse[0] & 0x0000ffff) | ((Bias_Write_Pattern ^ 0x8888) << 16);
 	#ifdef __BURN_EFUSE__    // 平時不作燒錄，要用時再開
 	unsigned int   bit_addr;
 	unsigned int   program_a;
+	unsigned int   GPHY_eFuse[2];
 
-	for (i = 0; i < 16; i++){
-		if (0 != ((1 << (i + 16)) & GPHY_eFuse[0])){
-			bit_addr = i + 16 + 2 + (0x1b9 << 3);                    // 由 0x98017000[0] 起算的 bit address
+	GPHY_eFuse[0] = (READ_MEM32(0x980171bc) << 22) | (READ_MEM32(0x980171b8) >> 10);    // 取出 bit [31:0]
+	GPHY_eFuse[0] = GPHY_eFuse[0] & 0xffff0000;   // 只保留 bit[31:16]
+	SD_DBG("Before programming, GPHY_eFuse[31:16] = %04x, ", (GPHY_eFuse[0] >> 16));
+
+	GPHY_eFuse[1] = (Bias_Write_Pattern ^ ADC_Bias_K_Default) << 16;  // 燒錄完成後應該是這個值
+	SD_DBG("will be programmed to %04x\n", (GPHY_eFuse[1] >> 16));
+	for (i = 16; i < 32; i++){
+		if (0 != ((1 << i) & GPHY_eFuse[1])){
+			bit_addr = i + 2 + (0x1b9 << 3);                         // 由 0x98017000[0] 起算的 bit address
 			program_a = (((bit_addr & 7) << 10) | (bit_addr >> 3));  // 將 bit address 轉換為燒錄用的格式
 			WRITE_MEM32(0x98017400, ((1 << 23) | (1 << 22) | (1 << 13) | program_a));  // enable program efuse & load bit address
 			Delay_uS(50);
-			//while (0 == (READ_MEM32(0x98017404) & (1 << 16)));       // confirm ready to program
 			WRITE_MEM32(0x98017400, ((1 << 15) | (1 << 14)));        // write strobe enable
 			Delay_uS(50);
-			//while (0 != (READ_MEM32(0x98017404) & (1 << 16)));       // confirm program done
 			WRITE_MEM32(0x98017400, (1 << 23));                      // disble program efuse
 		}
 	}
 
-	//while(0 != ((1 << 16) & READ_MEM32(0x98017404)));     // 需先確認 efuse 可讀取
-	//GPHY_eFuse[0] = (READ_MEM32(0x980171bc) << 22) | (READ_MEM32(0x980171b8) >> 10);
-	//GPHY_eFuse[1] = (READ_MEM32(0x980171c0) << 22) | (READ_MEM32(0x980171bc) >> 10);
-	//SD_DBG("After programming, GPHY_eFuse dump = %08x%08x\n", GPHY_eFuse[1], GPHY_eFuse[0]);
-	#endif /* __BURN_EFUSE__ */
+	GPHY_eFuse[0] = (READ_MEM32(0x980171bc) << 22) | (READ_MEM32(0x980171b8) >> 10);    // 取出 bit [31:0]
+	GPHY_eFuse[0] = GPHY_eFuse[0] & 0xffff0000;   // 只保留 bit[31:16]
+	SD_DBG("After programming, GPHY_eFuse[31:16] = %04x\n", (GPHY_eFuse[0] >> 16));
+	SD_DBG("efuse compare ");
+	if (GPHY_eFuse[0] == GPHY_eFuse[1]) {
+		SD_DBG("OK.\n");
+		sd_diag_pass();
+	} else {
+		SD_DBG("FAIL.\n");
+		sd_diag_fail();
+	}
+	#else
 	sd_diag_pass();
+	#endif /* __BURN_EFUSE__ */
 }
 
 void GPHY_test_entry(void){

@@ -1120,7 +1120,7 @@ int mmc_startup(struct mmc *mmc)
 #endif
 
 	//set initial speed
-	rtkemmc_set_speed(2);        //no wrapper divider
+	rtkemmc_set_wrapper_div(0);        //no wrapper divider
 
 CMD_RETRY:
 	/* Put the Card in Identify Mode */
@@ -1166,7 +1166,7 @@ CMD_RETRY:
 	{
 		g_bMicronFlash = 1;
 		//try sdr first
-		rtkemmc_set_speed(2);        //no wrapper divider
+		rtkemmc_set_wrapper_div(0);        //no wrapper divider
 
 		cmd_retry=0;cmd_retry1=0;
 		memset(outBlk, 0x00, 512);
@@ -1746,6 +1746,12 @@ REINIT:
 			(mmc->cid[1] >> 8) & 0xff, mmc->cid[1] & 0xff);
 	sprintf(mmc->block_dev.revision, "%d.%d", mmc->cid[2] >> 28,
 			(mmc->cid[2] >> 24) & 0xf);
+#if defined(CONFIG_SYS_RTK_EMMC_FLASH) && defined(USE_SIMPLIFY_READ_WRITE)
+	extern lbaint_t mmc_block_read(int dev, lbaint_t blknr, lbaint_t blkcnt, void *buffer);
+	extern lbaint_t mmc_block_write(int dev, lbaint_t blknr, lbaint_t blkcnt, void *buffer);
+	mmc->block_dev.block_read = mmc_block_read;
+	mmc->block_dev.block_write = mmc_block_write;	
+#endif
 	init_part(&mmc->block_dev);
 
 	return 0;
@@ -1763,7 +1769,7 @@ int mmc_select_sdr50(struct mmc *mmc,char* ext_csd)
 		gCurrentBootMode = MODE_SD20;
 		mmc->boot_caps &= ~MMC_MODE_HS200;
 		//try sdr first
-		rtkemmc_set_speed(0);        //no wrapper divider
+		rtkemmc_set_wrapper_div(0);        //no wrapper divider
 		
 		//restore original pad value
 		//mmc_getset_pad(mmc, MMC_IOS_RESTORE_PAD_DRV);

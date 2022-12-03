@@ -93,6 +93,12 @@ extern void dataflash_print_info(void);
 #include <i2c.h>
 #endif
 
+/**
+   @WD_Changes
+   includes the pwm header file
+**/
+#include <asm/arch/pwm.h>
+
 /************************************************************************
  *  External variables
  ************************************************************************/
@@ -131,6 +137,9 @@ inline void __blue_led_off(void) {}
 void blue_led_off(void) __attribute__((weak, alias("__blue_led_off")));
 
 extern int init_customize_func(void);
+#ifdef CONFIG_HDMITX_OFF
+extern void set_hdmi_off(void);
+#endif
 extern int sink_capability_handler(int set);
 extern int rtl8168_initialize(bd_t *bis);
 /*
@@ -845,9 +854,13 @@ void board_init_r(gd_t *id, ulong dest_addr)
     IR_init();
 #endif
 
-#if defined(CONFIG_SYS_AUTO_DETECT)
-	sink_capability_handler(1);
-#endif	
+#ifdef CONFIG_HDMITX_OFF
+	set_hdmi_off();
+#else
+	#ifdef CONFIG_SYS_AUTO_DETECT
+		sink_capability_handler(1);
+	#endif
+#endif
 
 #ifdef CONFIG_SYS_LOGO_DISP
 	puts("Logo: ");
@@ -896,6 +909,27 @@ void board_init_r(gd_t *id, ulong dest_addr)
 	/* Initialize from environment */
 	load_addr = getenv_ulong("loadaddr", 16, load_addr);
 
+    /**
+       @WD_Changes_begin
+       Enable the LED at 50% at the beginning of uboot
+     **/
+    rtd129x_pwm_init();
+    // enable the LED at the earlier boot
+    pwm_set_duty_rate(SYS_LED_PWM_PORT_NUM,50);
+    pwm_enable(SYS_LED_PWM_PORT_NUM,1);
+#ifdef CONFIG_BOARD_WD_PELICAN
+    // for pelican, turn on the FAN
+    //pwm_set_duty_rate(FAN_PWM_PORT_NUM, 100);  // set the FAN speed to 100%
+    pwm_set_duty_rate(FAN_PWM_PORT_NUM, 20);  // set the FAN speed to 100%
+    pwm_enable(FAN_PWM_PORT_NUM, 1);
+#endif    
+    /**
+       @WD_Changes_end
+       Enable the LED at 50% at the beginning of uboot
+     **/
+
+    
+    
 #ifdef CONFIG_BOARD_LATE_INIT
 	board_late_init();
 #endif
@@ -945,6 +979,12 @@ void board_init_r(gd_t *id, ulong dest_addr)
 		setenv("mem", (char *)memsz);
 	}
 #endif
+	/*
+		set K_MCP_DES_COUNT(0x9801_5934) = 0.
+		because we need to use nwc mcp, so clear this register after romcode do mcp       
+		this is workaround for mcp.
+	*/
+	*(volatile unsigned int*)(0x98015934) = 0x0;
 
       WATCHDOG_KICK();
 	/* main_loop() can return to retry autoboot, if so just run it again. */

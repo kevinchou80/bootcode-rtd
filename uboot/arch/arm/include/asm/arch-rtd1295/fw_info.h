@@ -104,6 +104,12 @@ typedef enum {
    FW_TYPE_UBOOT,
    FW_TYPE_BL31,		
    FW_TYPE_HYP,
+   FW_TYPE_GOLD_BL31,           // 40
+   FW_TYPE_RSA_KEY_FW,
+   FW_TYPE_RSA_KEY_TEE,
+   FW_TYPE_RESCUE_KERNEL,       // 41 (0x2c)
+   FW_TYPE_RESCUE_AUDIO,        // 42 (0x2b)
+   FW_TYPE_RESCUE_CONFIG,       // 43
    FW_TYPE_UNKNOWN
 } fw_type_code_t;
 
@@ -126,6 +132,19 @@ typedef enum {
    FS_TYPE_NONE,
    FS_TYPE_UNKOWN
 } rtk_part_fw_type_t;
+
+//-----------------------------------------------------------------------------------------------
+typedef struct {
+	uint	hwsetting_size;
+	uint	bootloader_size;
+	uint	fsbl_size;
+	uint	secure_os_size;
+	uint	atf_bl31_size;
+	uint	Kpublic_fw_size;
+	uint	Kpublic_tee_size;
+	uint    bootloader64_size;
+	uint    rescue_size;
+} __attribute__((packed)) fw_hw_setting_header_t;
 
 //-----------------------------------------------------------------------------------------------
 #if 0 // for nor

@@ -44,11 +44,16 @@ int rtk_boot2ndbootcode(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[
 	env_t *env_out = (env_t*)CONFIG_ENV_EXPORT_ADDR;
 
 	mdelay(1000);
+	
+#if 1 /* 2016-1220-add factory prop */
+	extern rtkfdt_add_factory();
+	rtkfdt_add_factory();
+#endif
 
 	if (env_export_uboot64(env_out))
 		printf("\n\EXPORT ENV FAIL!!\n");
 	else
-		printf("\n\nEXPORT ENV AT 0x%08p\n", env_out);
+		printf("\n\nEXPORT ENV AT 0x%08p, ENV size info:0x%08x,0x%08x,0x%08x\n", env_out, CONFIG_ENV_SIZE, ENV_SIZE, ENV_HEADER_SIZE);
 
 	do {
 		

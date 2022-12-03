@@ -114,7 +114,7 @@ struct sys_info {
 	int			mr_no;	/* number of memory regions */
 };
 
-#undef CONFIG_SYS_64BIT_LBA
+//#undef CONFIG_SYS_64BIT_LBA
 #ifdef CONFIG_SYS_64BIT_LBA
 typedef	u_int64_t lbasize_t;
 #else

@@ -231,11 +231,18 @@ void dev_print (block_dev_desc_t *dev_desc)
 			printf ("            Supports 48-bit addressing\n");
 #endif
 #if defined(CONFIG_SYS_64BIT_LBA)
+#if 1
 		printf ("            Capacity: %ld.%ld MB = %ld.%ld GB (%Ld x %ld)\n",
 			mb_quot, mb_rem,
 			gb_quot, gb_rem,
 			lba,
 			dev_desc->blksz);
+#else // workaround for invalid argument pass in printf
+		printf ("            Capacity: %ld.%ld MB = %ld.%ld GB (",
+			mb_quot, mb_rem,
+			gb_quot, gb_rem);
+		print64_dec(lba);print64_s(" x ");print64_dec(dev_desc->blksz);print64_s(")\n");
+#endif
 #else
 		printf ("            Capacity: %ld.%ld MB = %ld.%ld GB (%ld x %ld)\n",
 			mb_quot, mb_rem,
