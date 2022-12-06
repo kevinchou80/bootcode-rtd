@@ -54,8 +54,9 @@
 #ifdef CONFIG_FT_TEST
 #include <ft_test.h>
 #endif
-
+#ifdef CONFIG_RTD129X_PWM
 #include <asm/arch/pwm.h>
+#endif
 
 /******* REBOOT ACTION, sync with kernel rtd129x_restart.c **********/
 #define REBOOT_ACTION_ADDR	(ISO_NORST_SWC)
@@ -145,125 +146,6 @@ BOOT_MODE boot_mode = BOOT_NORMAL_MODE;
  * returns: 0 -  no key string, allow autoboot 1 - got key string, abort
  */
 #if defined(CONFIG_BOOTDELAY) && (CONFIG_BOOTDELAY >= 0)
-# if defined(CONFIG_AUTOBOOT_KEYED)
-#ifndef CONFIG_MENU
-// cklai mark this line to prevent parsing failed in source insight.
-// static inline
-#endif
-int abortboot(int bootdelay)
-{
-	int abort = 0;
-	uint64_t etime = endtick(bootdelay);
-	struct {
-		char* str;
-		u_int len;
-		int retry;
-	}
-	delaykey [] = {
-		{ str: getenv ("bootdelaykey"),  retry: 1 },
-		{ str: getenv ("bootdelaykey2"), retry: 1 },
-		{ str: getenv ("bootstopkey"),   retry: 0 },
-		{ str: getenv ("bootstopkey2"),  retry: 0 },
-	};
-
-	char presskey [MAX_DELAY_STOP_STR];
-	u_int presskey_len = 0;
-	u_int presskey_max = 0;
-	u_int i;
-
-#ifndef CONFIG_ZERO_BOOTDELAY_CHECK
-	if (bootdelay == 0)
-		return 0;
-#endif
-
-#  ifdef CONFIG_AUTOBOOT_PROMPT
-	printf(CONFIG_AUTOBOOT_PROMPT);
-#  endif
-
-#  ifdef CONFIG_AUTOBOOT_DELAY_STR
-	if (delaykey[0].str == NULL)
-		delaykey[0].str = CONFIG_AUTOBOOT_DELAY_STR;
-#  endif
-#  ifdef CONFIG_AUTOBOOT_DELAY_STR2
-	if (delaykey[1].str == NULL)
-		delaykey[1].str = CONFIG_AUTOBOOT_DELAY_STR2;
-#  endif
-#  ifdef CONFIG_AUTOBOOT_STOP_STR
-	if (delaykey[2].str == NULL)
-		delaykey[2].str = CONFIG_AUTOBOOT_STOP_STR;
-#  endif
-#  ifdef CONFIG_AUTOBOOT_STOP_STR2
-	if (delaykey[3].str == NULL)
-		delaykey[3].str = CONFIG_AUTOBOOT_STOP_STR2;
-#  endif
-
-	for (i = 0; i < sizeof(delaykey) / sizeof(delaykey[0]); i ++) {
-		delaykey[i].len = delaykey[i].str == NULL ?
-				    0 : strlen (delaykey[i].str);
-		delaykey[i].len = delaykey[i].len > MAX_DELAY_STOP_STR ?
-				    MAX_DELAY_STOP_STR : delaykey[i].len;
-
-		presskey_max = presskey_max > delaykey[i].len ?
-				    presskey_max : delaykey[i].len;
-
-#  if DEBUG_BOOTKEYS
-		printf("%s key:<%s>\n",
-		       delaykey[i].retry ? "delay" : "stop",
-		       delaykey[i].str ? delaykey[i].str : "NULL");
-#  endif
-	}
-
-	/* In order to keep up with incoming data, check timeout only
-	 * when catch up.
-	 */
-	do {
-		if (tstc()) {
-			if (presskey_len < presskey_max) {
-				presskey [presskey_len ++] = getc();
-			}
-			else {
-				for (i = 0; i < presskey_max - 1; i ++)
-					presskey [i] = presskey [i + 1];
-
-				presskey [i] = getc();
-			}
-		}
-
-		for (i = 0; i < sizeof(delaykey) / sizeof(delaykey[0]); i ++) {
-			if (delaykey[i].len > 0 &&
-			    presskey_len >= delaykey[i].len &&
-			    memcmp (presskey + presskey_len - delaykey[i].len,
-				    delaykey[i].str,
-				    delaykey[i].len) == 0) {
-#  if DEBUG_BOOTKEYS
-				printf("got %skey\n",
-				       delaykey[i].retry ? "delay" : "stop");
-#  endif
-
-#  ifdef CONFIG_BOOT_RETRY_TIME
-				/* don't retry auto boot */
-				if (! delaykey[i].retry)
-					retry_time = -1;
-#  endif
-				abort = 1;
-			}
-		}
-	} while (!abort && get_ticks() <= etime);
-
-#  if DEBUG_BOOTKEYS
-	if (!abort)
-		puts("key timeout\n");
-#  endif
-
-#ifdef CONFIG_SILENT_CONSOLE
-	if (abort)
-		gd->flags &= ~GD_FLG_SILENT;
-#endif
-
-	return abort;
-}
-
-# else	/* !defined(CONFIG_AUTOBOOT_KEYED) */
 
 #ifdef CONFIG_MENUKEY
 static int menukey = 0;
@@ -313,14 +195,11 @@ int abortboot(int bootdelay)
     if (factory_read(BOOT_RECOVERY_FILE_NAME, &dst_addr, &dst_length)) {
         printf("\n------------can't find %s\n", BOOT_RECOVERY_FILE_NAME);
     } else {
-        //bootloader_message* pBootMsg = (bootloader_message*)dst_addr;
-        //if (strcmp("boot-recovery", pBootMsg->command) == 0) {
             printf("\n------------We will Enter Recovery Rescue\n");
             bEnterRecovery = 1;
-        //}
     }
-
 #endif
+
 /*
  **********************************************************
  * Realtek Patch:
@@ -415,47 +294,22 @@ start = get_timer(0);
 				/* do nothing */
 				break;
 		}
-#ifdef CONFIG_INSTALL_GPIO_NUM
-		if(!getGPIO(CONFIG_INSTALL_GPIO_NUM)){		
-			printf("\nPress Install Button\n");
-			setenv("rescue_cmd", "go r");
-			boot_mode = BOOT_RESCUE_MODE;
-			abort = 1; // don't auto boot
-		}
+#if defined(CONFIG_INSTALL_GPIO_NUM)
+		if(!getGPIO(CONFIG_INSTALL_GPIO_NUM))
+#elif defined(CONFIG_INSTALL_IGPIO_NUM)
+		if(!getISOGPIO(CONFIG_INSTALL_IGPIO_NUM))
 #endif
-
-        /**
-           @WD_Changes_begin
-           Power On reset to force the device enter
-           Image Recover Mode which booting the device
-           from USB stick
-         **/
-        if(!getISOGPIO(FACTORY_RST_BTN)) { // check if the reset button is pressed
-            printf("\nPress USB-Install Button\n"); // print the message
-            //            rtd129x_pwm_init();
-            pwm_set_freq(SYS_LED_PWM_PORT_NUM, 1);  // set the frequency to 1 HZ
+#if defined(CONFIG_INSTALL_GPIO_NUM) || defined(CONFIG_INSTALL_IGPIO_NUM)
+		{
+			printf("\nPress Install Button\n");
+			#if defined(CONFIG_BOARD_WD_MONARCH) || defined(CONFIG_BOARD_WD_PELICAN) && defined(SYS_LED_PWM_PORT_NUM)
+			pwm_set_freq(SYS_LED_PWM_PORT_NUM, 1);  // set the frequency to 1 HZ
             pwm_set_duty_rate(SYS_LED_PWM_PORT_NUM, 50);
             pwm_enable(SYS_LED_PWM_PORT_NUM, 1);
+			#endif
             setenv("rescue_cmd", "go ru"); //set the environment variable rescue_cmd=go ru
             boot_mode = BOOT_RESCUE_MODE; // set the boot_mode
             abort = 1; // don't auto boot
-        }
-        /**
-           @WD_Changes_end
-         **/
-        
-#if 0//defined(CONFIG_SYS_IR_SUPPORT)		
-//		if( rtd_readbits(IR_SR_reg, _BIT0)){	
-//            printf("\nGet IR\n");			
-//			rtd_setbits(IR_SR_reg, _BIT0);		
-//			ir_flag=1;
-//			break;	
-//		}
-		if (IR_Get_irdvf()) {
-			printf("\nGet IR\n");
-			IR_Set_irdvf(_BIT0);
-			ir_flag = 1;
-			break;
 		}
 #endif
 	}	
@@ -730,7 +584,6 @@ start = get_timer(0);
 
 	return abort;
 }
-# endif	/* CONFIG_AUTOBOOT_KEYED */
 #endif	/* CONFIG_BOOTDELAY >= 0  */
 
 void check_reset_reason(void)
@@ -896,7 +749,7 @@ void main_loop (void)
 		run_command_list(s, -1, 0);
 
 		/* enter rescue mode because of booting failed or other reasons */
-		boot_mode = BOOT_RESCUE_MODE;
+		boot_mode = BOOT_CONSOLE_MODE;
 
 # ifdef CONFIG_AUTOBOOT_KEYED
 		disable_ctrlc(prev);	/* restore Control C checking */
@@ -1025,10 +878,7 @@ void reset_cmd_timeout(void)
 
 #ifdef CONFIG_CMDLINE_EDITING
 
-/*
- * cmdline-editing related codes from vivi.
- * Author: Janghoon Lyu <nandy@mizi.com>
- */
+
 
 #define putnstr(str,n)	do {			\
 		printf ("%.*s", (int)n, str);	\

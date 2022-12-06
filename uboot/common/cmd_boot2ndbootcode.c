@@ -45,7 +45,7 @@ int rtk_boot2ndbootcode(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[
 
 	mdelay(1000);
 	
-#if 1 /* 2016-1220-add factory prop */
+#if 0 /* 2016-1220-add factory prop */
 	extern rtkfdt_add_factory();
 	rtkfdt_add_factory();
 #endif

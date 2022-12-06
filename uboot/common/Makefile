@@ -182,6 +182,9 @@ COBJS-$(CONFIG_CMD_UBI) += cmd_ubi.o
 COBJS-$(CONFIG_CMD_UBIFS) += cmd_ubifs.o
 COBJS-$(CONFIG_CMD_UNIVERSE) += cmd_universe.o
 COBJS-$(CONFIG_CMD_UNZIP) += cmd_unzip.o
+ifdef CONFIG_LZMA
+COBJS-$(CONFIG_CMD_LZMADEC) += cmd_lzmadec.o
+endif
 ifdef CONFIG_CMD_USB
 COBJS-y += cmd_usb.o
 COBJS-y += usb.o usb_hub.o

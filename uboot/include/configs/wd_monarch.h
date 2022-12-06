@@ -196,9 +196,12 @@
 	#define CONFIG_BOOTP_SERVERIP		"192.168.137.2"	/* factory release */
 #endif
 
-
+#define UBOOT_PINGPONG_NEW_DESIGN
+#ifdef UBOOT_PINGPONG_NEW_DESIGN
 #define CONFIG_CMD_WDPP
 #define CONFIG_WD_AB
+#endif
+
 
 #define CONFIG_CMD_SATA
 #ifdef CONFIG_CMD_SATA
